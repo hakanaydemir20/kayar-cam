@@ -77,6 +77,33 @@ await page.uncheck('#optVerify');
 await page.click('[data-bt="sync"]');
 await page.waitForTimeout(300);
 await page.screenshot({ path: 'test-results/ui_sync.png' });
+// 13) örtüşen çevrim aç/kapa
+await page.click('.syncbar input');
+await page.waitForTimeout(4000);
+log('örtüşen çevrim', await st(), await page.evaluate(() => [app.project.sync?.overlap, app.stockSim.overlap, app.verify?.ss.collisions.length]));
+await page.click('.syncbar input');
+await page.waitForTimeout(3000);
+// 14) yeni işlemler: çokgen + yazı özelliği ekle, otomatik plan
+await page.evaluate(() => { app.sel = { kind: 'part' }; app.renderProps(); });
+await page.evaluate(() => { app.addFeature('polygon'); });
+await page.waitForTimeout(1500);
+await page.evaluate(() => { app.action('auto'); });
+await page.waitForTimeout(3500);
+log('çokgen + otomatik plan', await st(), await page.evaluate(() => [app.project.ops.map(o => o.type).filter(t => t === 'polygonMill').length, app.result.errors.map(e => e.msg), app.verify?.ss.collisions.slice(0, 3).map(c => c.msg), app.project.part.features.at(-1)]));
+// 15) segmentasyon
+await page.evaluate(() => { app.project.stock.segment = 15; app.recalc(true); });
+await page.waitForTimeout(3500);
+log('segment 15', await st());
+// 16) kurulum föyü
+await page.click('[data-act="sheet"]');
+await page.waitForTimeout(800);
+log('föy açık', await page.evaluate(() => !!document.querySelector('iframe.sheet')));
+await page.click('#mclose');
+// 17) görünüm seçenekleri
+for (const [id, v] of [['optCabin', 'full'], ['optPath', 'op'], ['optPath', 'none'], ['optCabin', 'none'], ['optPath', 'all']]) { await page.selectOption('#' + id, v); await page.waitForTimeout(200); }
+await page.keyboard.press('KeyE'); await page.keyboard.press('KeyE');
+await page.click('[data-view="machine"]'); await page.waitForTimeout(500);
+await page.screenshot({ path: 'test-results/ui_machine.png' });
 log('SON', await st());
 log('HATALAR', errs.length ? errs.join('\n') : 'yok');
 await browser.close();

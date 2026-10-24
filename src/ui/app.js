@@ -611,16 +611,25 @@ export class App {
   addFeature(ft) {
     const P = this.project, L = P.part.length;
     const id = 'u' + Math.random().toString(36).slice(2, 7);
+    // en uzun silindirik bölüm (çokgen/yazı/kanal varsayılanları oraya, o bölümün çapına göre)
+    let best = null;
+    for (let i = 0; i < P.part.profile.length - 1; i++) {
+      const a = P.part.profile[i], b = P.part.profile[i + 1];
+      if (Math.abs(a.r - b.r) < 1e-6 && a.r > 0 && b.z - a.z > 2 && (!best || b.z - a.z > best.z1 - best.z0)) best = { z0: a.z, z1: b.z, r: a.r };
+    }
+    if (!best) best = { z0: 0, z1: L, r: P.part.maxDia / 2 };
+    const zm = (best.z0 + best.z1) / 2, half = Math.max(1, Math.min(4, (best.z1 - best.z0) / 2 - 1));
+    const r1 = (v) => Math.round(v * 10) / 10;
     const defs = {
       axialHole: { side: 'front', dia: 4, depth: Math.min(6, L / 2), through: false },
       crossHole: { dia: 3, z: L / 2, c: 0, y: 0, through: true, depthDia: null },
       flat: { c: 0, depth: 1, z0: L / 2 - 3, z1: L / 2 + 3 },
       thread: { dia: Math.round(P.part.maxDia * 0.7), pitch: 1, z0: 1, z1: Math.min(10, L / 2) },
       pocket: { dia: 6, depth: 1, z: L / 2, c: 0 },
-      polygon: { n: 6, af: Math.round(P.part.maxDia * 0.8 * 10) / 10, z0: L / 2 - 3, z1: L / 2 + 3, c: 0 },
-      odSlot: { width: 4, depth: 0.8, z0: L / 2 - 3, c0: 0, z1: L / 2 + 3, c1: 90 },
+      polygon: { n: 6, af: r1(2 * best.r * 0.8), z0: r1(zm - half), z1: r1(zm + half), c: 0 },
+      odSlot: { width: 4, depth: r1(Math.min(0.8, best.r * 0.15)), z0: r1(zm - half + 2), c0: 0, z1: r1(zm + half - 2), c1: 90 },
       faceSlot: { side: 'back', width: 4, depth: 1, c: 0 },
-      engrave: { text: 'KAYAR', height: 3, depth: 0.15, z: L / 2, c: 0 },
+      engrave: { text: 'KAYAR', height: r1(Math.min(3, (best.z1 - best.z0) - 1)), depth: 0.15, z: r1(zm), c: 0 },
       facePolygon: { side: 'back', n: 6, af: Math.round(P.part.maxDia * 0.6 * 10) / 10, depth: 2, c: 0 },
     };
     const f = { id, type: ft, ...defs[ft] };
