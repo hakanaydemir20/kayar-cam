@@ -12,6 +12,7 @@ import { makePart, profileFromTable, STD_BARS, suggestBar, examplePart } from '.
 import { h, esc, OP_PARAMS, TOOL_FIELDS, FEATURE_FIELDS, FEATURE_LABELS, featureText, field } from './forms.js';
 import { importStepFile, ghostFromMesh, ghostFromProfile, refixture, loadToolModel } from './stepFlow.js';
 import { customToolModels } from '../view3d/toolMeshes.js';
+import { setupSheetHtml, barFlow, profileSvg } from './report.js';
 
 const $ = (id) => document.getElementById(id);
 const AUTOSAVE = 'kayarcam.project.v1';
@@ -344,6 +345,7 @@ export class App {
         this.project.ops = autoOperations(this.project); this.sel = { kind: 'op', id: this.project.ops[0]?.id }; this.recalc(); break;
       case 'calc': this.recalc(); this.toast('Program yeniden hesaplandı'); break;
       case 'download': this.downloadNC(); break;
+      case 'sheet': this.openSetupSheet(); break;
       case 'postcfg': this.openPostConfig(); break;
     }
   }
@@ -528,7 +530,18 @@ export class App {
       g.append(field(P.stock, 'faceStock', 'Alın payı', 'mm', 'num', change));
       g.append(field(P.stock, 'maxRpm', 'G50 devir limiti', 'dev/dak', 'int', change));
       g.append(field(P.stock, 'segment', 'Kılavuz burç segment boyu (0 = kapalı)', 'mm', 'num', change));
+      if (P.stock.barLength == null) P.stock.barLength = 2500;
+      if (P.stock.remnant == null) P.stock.remnant = 250;
+      g.append(field(P.stock, 'barLength', 'Çubuk boyu', 'mm', 'num', change));
+      g.append(field(P.stock, 'remnant', 'Kalan uç (çubuk sonu)', 'mm', 'num', change));
       body.append(g);
+      const bf = barFlow(P, this.totalTime || 0);
+      body.append(h('div', { class: 'tsec', style: { padding: '8px 0 2px' } }, 'Çubuk akışı'));
+      body.append(h('div', { class: 'kv' },
+        h('span', {}, 'Çubuk başına parça'), h('span', {}, String(bf.parts)),
+        h('span', {}, 'Malzeme verimi'), h('span', {}, '%' + (bf.yield * 100).toFixed(1)),
+        h('span', {}, 'Saatte parça'), h('span', {}, bf.partsPerHour.toFixed(1)),
+        h('span', {}, 'Bir çubuk süresi'), h('span', {}, (bf.barTime / 60).toFixed(1) + ' dk')));
       const cut = P.tools.find(t => t.type === 'cutoff');
       body.append(h('div', { class: 'kv' },
         h('span', {}, 'Parça boyu'), h('span', {}, P.part.length.toFixed(3) + ' mm'),
@@ -557,6 +570,7 @@ export class App {
     } else if (s.kind === 'part') {
       head(P.part.name, P.part.source === 'step' ? 'STEP modelinden' : 'Profil tablosundan');
       body.append(field(P.part, 'name', 'Parça adı', '', 'text', () => { P.name = P.part.name; change(); }, { full: true }));
+      body.append(h('div', { class: 'svgprev', html: profileSvg(P.part, { w: 300, h: 130 }) }));
       if (P.part.source !== 'step') {
         const rows = P.part.rows || [];
         const tbl = h('table', { class: 'pt' }, h('tr', {}, ...['Ø', 'Boy', 'Son Ø', 'Pah', 'R', ''].map(x => h('th', {}, x))));
@@ -844,7 +858,7 @@ export class App {
     cyc.append(field(post, 'workShift', 'İş kaydırması şablonu', '', 'text', () => {}));
     body.append(cyc);
     body.append(h('div', { class: 'tsec', style: { padding: '8px 0 2px' } }, 'M Kodları'));
-    const labels = { mainCW: 'Ana mil ileri', mainCCW: 'Ana mil geri', mainStop: 'Ana mil dur', subCW: 'Karşı mil ileri', subCCW: 'Karşı mil geri', subStop: 'Karşı mil dur', liveCW: 'Tahrikli ileri', liveCCW: 'Tahrikli geri', liveStop: 'Tahrikli dur', backLiveCW: 'Arka tahrikli ileri', backLiveCCW: 'Arka tahrikli geri', backLiveStop: 'Arka tahrikli dur', coolantOn: 'Soğutma aç', coolantOff: 'Soğutma kapa', backCoolantOn: 'Arka soğutma aç', backCoolantOff: 'Arka soğutma kapa', mainCAxisOn: 'C1 ekseni aç', mainCAxisOff: 'C1 ekseni kapa', subCAxisOn: 'C2 ekseni aç', subCAxisOff: 'C2 ekseni kapa', rigidTap: 'Rijit kılavuz (M29)', mainChuckClose: 'Ana pens kapa', mainChuckOpen: 'Ana pens aç', subChuckClose: 'Karşı pens kapa', subChuckOpen: 'Karşı pens aç', spindleSync: 'Senkron aç', spindleSyncOff: 'Senkron kapa', cutoffCheck: 'Kesim kontrol', partEject: 'Parça atma', barFeedStart: 'Çubuk besleme başla', barFeedEnd: 'Çubuk besleme bitir', programEnd: 'Program sonu', optionalStop: 'Opsiyonel dur' };
+    const labels = { mainCW: 'Ana mil ileri', mainCCW: 'Ana mil geri', mainStop: 'Ana mil dur', subCW: 'Karşı mil ileri', subCCW: 'Karşı mil geri', subStop: 'Karşı mil dur', liveCW: 'Tahrikli ileri', liveCCW: 'Tahrikli geri', liveStop: 'Tahrikli dur', backLiveCW: 'Arka tahrikli ileri', backLiveCCW: 'Arka tahrikli geri', backLiveStop: 'Arka tahrikli dur', coolantOn: 'Soğutma aç', coolantOff: 'Soğutma kapa', backCoolantOn: 'Arka soğutma aç', backCoolantOff: 'Arka soğutma kapa', mainCAxisOn: 'C1 ekseni aç', mainCAxisOff: 'C1 ekseni kapa', subCAxisOn: 'C2 ekseni aç', subCAxisOff: 'C2 ekseni kapa', rigidTap: 'Rijit kılavuz (M29)', partCount: 'Parça sayacı (boş = yok)', mainChuckClose: 'Ana pens kapa', mainChuckOpen: 'Ana pens aç', subChuckClose: 'Karşı pens kapa', subChuckOpen: 'Karşı pens aç', spindleSync: 'Senkron aç', spindleSyncOff: 'Senkron kapa', cutoffCheck: 'Kesim kontrol', partEject: 'Parça atma', barFeedStart: 'Çubuk besleme başla', barFeedEnd: 'Çubuk besleme bitir', programEnd: 'Program sonu', optionalStop: 'Opsiyonel dur' };
     const cg = h('div', { class: 'codes' });
     for (const k of Object.keys(post.codes)) cg.append(field(post.codes, k, labels[k] || k, '', 'text', () => {}));
     body.append(cg);
@@ -862,6 +876,17 @@ export class App {
     body.append(mg);
     body.append(h('div', { class: 'btnrow' }, h('button', { class: 'btn pri', onclick: () => { this.closeModal(); this.recalc(true); this.toast('Post / makine ayarları uygulandı'); } }, 'Uygula ve Yeniden Hesapla')));
     this.openModal('Post-Processor ve Makine Ayarları', body);
+  }
+
+  openSetupSheet() {
+    if (!this.result?.posted) { this.toast('Önce programı hesaplayın'); return; }
+    const html = setupSheetHtml(this.project, this.result, this.opTimes || {}, this.totalTime || 0);
+    const fr = h('iframe', { class: 'sheet' });
+    fr.srcdoc = html;
+    const body = h('div', {}, fr, h('div', { class: 'btnrow' },
+      h('button', { class: 'btn pri', onclick: () => fr.contentWindow?.print() }, 'Yazdır'),
+      h('button', { class: 'btn', onclick: () => download(`kurulum_O${String(this.project.post.programNumber).padStart(4, '0')}.html`, html, 'text/html') }, 'HTML İndir')));
+    this.openModal('Kurulum Föyü — ' + this.project.part.name, body);
   }
 
   openModal(title, content) {

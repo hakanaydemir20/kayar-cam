@@ -27,6 +27,7 @@
     "barFeedStart": "M6", "barFeedEnd": "M7",
     "programEnd": "M30",
     "rigidTap": "M29",
+    "partCount": "",
     "optionalStop": "M1"
   },
   "waitCode": "M{n}",

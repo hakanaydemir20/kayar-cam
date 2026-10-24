@@ -82,6 +82,7 @@ export function buildProgram(project) {
   }
   const re = ops.find(o => o.type === 'rechuck');
   if (re) run(p1, re);
+  if (project.post.codes.partCount) p1.m('partCount');   // parça sayacı (tanımlıysa)
   p1.coolant(false);
   p1.spindle({ which: 'main', dir: 'stop' });
   p1.rapid({ X: ctx.safeX });
