@@ -1,0 +1,120 @@
+// Proje: makine + post + stok + parça + takımlar + işlemler. JSON kaydet/aç.
+import machineDef from './machine/sb20r-g.json';
+import postDef from './post/postProfile.json';
+import { defaultTools } from './tools/toolLibrary.js';
+import { examplePart, suggestBar } from './part/part.js';
+import { makeOp, buildProgram } from './ops/program.js';
+import { buildContext } from './ops/context.js';
+import { findGrooves } from './ops/generators.js';
+import { postProcess } from './post/fanucStar.js';
+import { interpret } from './sim/interpreter.js';
+import { makeFrames } from './sim/frames.js';
+
+export const clone = (o) => JSON.parse(JSON.stringify(o));
+
+export function newProject(part = examplePart()) {
+  const p = {
+    version: 1,
+    name: part.name,
+    machine: clone(machineDef),
+    post: clone(postDef),
+    stock: { barDia: suggestBar(part.maxDia) || 20, faceStock: 0.3, maxRpm: 8000 },
+    zero: { zShift: 0, label: 'Ön alın merkezi' },
+    part,
+    tools: defaultTools(),
+    ops: [],
+  };
+  p.ops = autoOperations(p);
+  return p;
+}
+
+const tt = (p, num) => p.tools.find(t => t.num === num)?.id ?? null;
+
+/** Özelliklerden otomatik işlem planı (ESPRIT "feature-based" mantığı) */
+export function autoOperations(p) {
+  const ops = [];
+  const f = p.part.features;
+  ops.push(makeOp('face', tt(p, 1)));
+  ops.push(makeOp('rough', tt(p, 1)));
+  ops.push(makeOp('finish', tt(p, 2)));
+  const gTool = p.tools.find(t => t.num === 3);
+  for (const g of findGrooves(buildContext(p), p.tools.find(t => t.num === 2))) {
+    ops.push(makeOp('groove', gTool?.id ?? null, { z0: g.z0, z1: g.z1 }, `Kanal Z${g.z0}-${g.z1}`));
+  }
+  for (const h of f.filter(x => x.type === 'axialHole' && x.side === 'front')) {
+    ops.push(makeOp('center', tt(p, 21), { featureId: h.id }, 'Punta Ø' + h.dia));
+    const d = p.tools.find(t => t.unit === 'front' && t.type === 'drill' && Math.abs(t.dia - h.dia) < 1e-6);
+    ops.push(makeOp('drill', d?.id ?? null, { featureId: h.id }, 'Delme Ø' + h.dia));
+  }
+  for (const th of f.filter(x => x.type === 'thread')) ops.push(makeOp('thread', tt(p, 4), { featureId: th.id }, `Diş M${th.dia}x${th.pitch}`));
+  for (const c of f.filter(x => x.type === 'crossHole')) {
+    const d = p.tools.find(t => t.unit === 'cross' && t.type === 'ldrill' && Math.abs(t.dia - c.dia) < 1e-6);
+    ops.push(makeOp('crossDrill', d?.id ?? null, { featureId: c.id }, `Çapraz Delik Ø${c.dia}`));
+  }
+  for (const fl of f.filter(x => x.type === 'flat')) ops.push(makeOp('flatMill', tt(p, 12), { featureId: fl.id }, 'Düzlük C' + fl.c));
+  for (const pk of f.filter(x => x.type === 'pocket')) ops.push(makeOp('pocketMill', tt(p, 13), { featureId: pk.id }, 'Cep Ø' + pk.dia));
+  const back = f.filter(x => x.type === 'axialHole' && x.side === 'back');
+  if (back.length) ops.push(makeOp('pickoff'));
+  ops.push(makeOp('cutoff', tt(p, 5)));
+  for (const h of back) {
+    const d = p.tools.find(t => (t.unit === 'back' || t.unit === 'rear') && t.type === 'drill' && Math.abs(t.dia - h.dia) < 1e-6);
+    ops.push(makeOp('backDrill', d?.id ?? null, { featureId: h.id }, 'Arka Delme Ø' + h.dia));
+  }
+  if (back.length) ops.push(makeOp('eject'));
+  ops.push(makeOp('rechuck'));
+  return ops;
+}
+
+/** Tam boru hattı: işlemler → IR → G-kod → yorumla (simülasyon/doğrulama girdisi) */
+export function runPipeline(project) {
+  const built = buildProgram(project);
+  let posted = null, sim = null;
+  const errors = built.errors.map(e => ({ ...e, src: 'cam' }));
+  const warnings = built.warnings.map(e => ({ ...e, src: 'cam' }));
+  try {
+    posted = postProcess(built.progs, project.post, {
+      partName: project.part.name, date: new Date().toISOString().slice(0, 10),
+      stock: `CUBUK D${project.stock.barDia} BOY ${project.part.length.toFixed(2)}`,
+      zShift: project.zero?.zShift || 0,
+    });
+  } catch (e) {
+    errors.push({ src: 'post', msg: e.message });
+  }
+  if (posted) {
+    const pick = project.ops.find(o => o.type === 'pickoff' && o.enabled);
+    const grip = pick ? Math.min(pick.params.grip, project.part.length - 1) : 5;
+    const frames = makeFrames({ L: project.part.length, grip, zShift: project.zero?.zShift || 0 });
+    sim = interpret(posted.text, { profile: project.post, machine: project.machine, tools: project.tools, frames });
+    sim.frames = frames;
+    for (const e of sim.errors) errors.push({ ...e, src: 'nc' });
+    // öz-kontrol: CAM'in amaçladığı konum = makinenin yorumlanan konumu
+    posted.checks.forEach((list, pi) => {
+      const moves = sim.paths[pi]?.moves || [];
+      const byLine = new Map();
+      for (const m of moves) if (m.kind === 'rapid' || m.kind === 'feed' || m.kind === 'arc') byLine.set(m.line, m);
+      for (const c of list) {
+        const m = byLine.get(c.line);
+        if (!m) continue;
+        for (const [a, v] of Object.entries(c.pos)) {
+          if (Math.abs((m.to[a] ?? 0) - v) > 0.0011) {
+            errors.push({ path: pi + 1, line: c.line, src: 'nc', msg: `Post tutarsızlığı: ${a} amaçlanan ${v.toFixed(3)}, makinede ${(+m.to[a]).toFixed(3)}` });
+            break;
+          }
+        }
+      }
+    });
+    for (const w of sim.warnings) warnings.push({ ...w, src: 'nc' });
+  }
+  return { built, posted, sim, errors, warnings };
+}
+
+export function saveProject(p) {
+  const { part, ...rest } = p;
+  const lightPart = { ...part, mesh: null }; // ağ STEP'ten (stepB64) yeniden üretilir
+  return JSON.stringify({ ...rest, part: lightPart }, null, 1);
+}
+export function loadProject(text) {
+  const p = JSON.parse(text);
+  if (!p.version || !p.part || !p.tools || !p.ops) throw new Error('Geçersiz proje dosyası');
+  return p;
+}

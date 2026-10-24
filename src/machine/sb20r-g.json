@@ -1,0 +1,105 @@
+{
+  "id": "star-sb20r-g",
+  "name": "Star SB-20R Type G",
+  "control": "FANUC 0i-TF Plus",
+  "source": "Star Micronics katalog (SB Serisi), starmicronics.co.in, starcncmakina.com.tr",
+  "notes": "Eksen strokları (Z1 hariç) katalogda yayınlanmamıştır; 'tahmini' işaretli değerler makineden doğrulanmalıdır.",
+  "maxBarDia": 20,
+  "guideBush": true,
+  "rapid": 35000,
+  "axes": {
+    "X1": {
+      "min": -10,
+      "max": 140,
+      "estimated": true,
+      "desc": "Gang tool post radyal (çap değeri)"
+    },
+    "Y1": {
+      "min": -150,
+      "max": 150,
+      "estimated": true,
+      "desc": "Gang tool post takım seçimi / çapraz"
+    },
+    "Z1": {
+      "min": -5,
+      "max": 205,
+      "estimated": false,
+      "desc": "Kayar başlık stroku 205 mm"
+    },
+    "C1": {
+      "min": -99999,
+      "max": 99999,
+      "desc": "Ana iş mili C ekseni"
+    },
+    "X2": {
+      "min": -150,
+      "max": 20,
+      "estimated": true,
+      "desc": "Karşı iş mili yanal (mm, makine)"
+    },
+    "Z2": {
+      "min": -5,
+      "max": 280,
+      "estimated": true,
+      "desc": "Karşı iş mili eksenel"
+    },
+    "C2": {
+      "min": -99999,
+      "max": 99999,
+      "desc": "Karşı iş mili C ekseni"
+    }
+  },
+  "mainSpindle": {
+    "maxRpm": 10000,
+    "powerKw": 2.2,
+    "maxChuck": 20
+  },
+  "subSpindle": {
+    "maxRpm": 8000,
+    "powerKw": 0.55,
+    "maxChuck": 20,
+    "maxEject": 80,
+    "maxProjection": 30
+  },
+  "liveTools": {
+    "cross": {
+      "maxRpm": 6000,
+      "count": 4,
+      "collet": "ER16",
+      "maxDrill": 7,
+      "maxTap": 6
+    },
+    "back": {
+      "maxRpm": 8000,
+      "count": 4,
+      "maxDrillStatic": 8,
+      "maxDrillLive": 6
+    }
+  },
+  "stations": {
+    "gangTurn": {
+      "count": 6,
+      "shank": 12,
+      "desc": "Tornalama takımları □12 (7 adet □10 seçeneği)"
+    },
+    "cross": {
+      "count": 4,
+      "desc": "4 iş milli çapraz tahrikli ünite ER16"
+    },
+    "frontSleeve": {
+      "count": 4,
+      "maxDrill": 12,
+      "maxTap": 10,
+      "desc": "Kovan tutucu ön"
+    },
+    "rearSleeve": {
+      "count": 4,
+      "desc": "Kovan tutucu arka"
+    },
+    "back": {
+      "count": 4,
+      "desc": "Arka 4 iş milli ünite (sabit/tahrikli)"
+    }
+  },
+  "subHomeZ": 200
+}

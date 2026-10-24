@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Kayar CAM — Star SB-20R Type G</title>
+</head>
+<body>
+<div class="shell" id="app">
+  <header class="topbar">
+    <div class="brand"><div class="logo">K</div><div class="title">KAYAR <b>CAM</b></div></div>
+    <div class="tb-sep"></div>
+    <div class="chip" id="machineChip">Star SB-20R Type G · FANUC 0i-TF</div>
+    <div class="chip warn" id="postChip" title="M kodları makinedeki örnek programla doğrulanmadı">POST DOĞRULANMADI</div>
+    <div class="tb-right">
+      <button class="tb" data-act="new">Yeni</button>
+      <button class="tb" data-act="open">Aç</button>
+      <button class="tb" data-act="save">Kaydet</button>
+      <div class="status"><span class="dot" id="statusDot"></span><span id="statusTxt">Hazır</span></div>
+    </div>
+  </header>
+
+  <nav class="ribbon" id="ribbon">
+    <div class="rgroup">
+      <div class="rlabel">Parça</div>
+      <div class="rbtns">
+        <button class="rb primary" data-act="step"><i>⬢</i>STEP Yükle</button>
+        <button class="rb" data-act="fixture"><i>⊕</i>Bağlama / Sıfır</button>
+        <button class="rb" data-act="profile"><i>▤</i>Profil Tablosu</button>
+      </div>
+    </div>
+    <div class="rgroup">
+      <div class="rlabel">Torna ($1)</div>
+      <div class="rbtns" id="rbTurn"></div>
+    </div>
+    <div class="rgroup">
+      <div class="rlabel">Frezeleme / C-Y</div>
+      <div class="rbtns" id="rbMill"></div>
+    </div>
+    <div class="rgroup">
+      <div class="rlabel">Karşı İş Mili ($2)</div>
+      <div class="rbtns" id="rbSub"></div>
+    </div>
+    <div class="rgroup">
+      <div class="rlabel">Program</div>
+      <div class="rbtns">
+        <button class="rb" data-act="auto"><i>✦</i>Otomatik Plan</button>
+        <button class="rb primary" data-act="calc"><i>▶</i>Hesapla</button>
+        <button class="rb" data-act="download"><i>⤓</i>NC İndir</button>
+        <button class="rb" data-act="postcfg"><i>⚙</i>Post / Makine</button>
+      </div>
+    </div>
+  </nav>
+
+  <aside class="left" id="tree"></aside>
+
+  <main class="center">
+    <div class="viewport" id="viewport"></div>
+    <div class="dro" id="dro"></div>
+    <div class="vbtns">
+      <button data-view="zone">İşleme Bölgesi</button>
+      <button data-view="iso">İzometrik</button>
+      <button data-view="front">Ön</button>
+      <button data-view="top">Üst</button>
+      <button data-view="sub">Karşı Mil</button>
+      <button data-view="machine">Makine</button>
+      <span class="vsep"></span>
+      <label title="Kısayol: T">Takım yolu <select id="optPath"><option value="all">Tümü</option><option value="op">Aktif işlem</option><option value="sel">Seçili işlem</option><option value="none">Gizli</option></select></label>
+      <label>Takımlar <select id="optTools"><option value="ghost">Aktif + saydam</option><option value="active">Yalnız aktif</option><option value="all">Tümü</option></select></label>
+      <label>Kabin <select id="optCabin"><option value="full">Tam</option><option value="cut">Ön kapaklar yok</option><option value="none">Gizli</option></select></label>
+      <label title="Kırmızı eksen okları ve makine koordinatları (kısayol: E)"><input type="checkbox" id="optAxes" checked> Eksenler</label>
+      <label><input type="checkbox" id="optGhost" checked> Hedef model</label>
+      <label><input type="checkbox" id="optVerify"> Verify renkleri</label>
+    </div>
+    <div class="legend">
+      <span><i style="background:#f59e0b"></i>G0 hızlı</span>
+      <span><i style="background:#38bdf8"></i>G1 kesme</span>
+      <span><i style="background:#a78bfa"></i>G2/G3 yay</span>
+      <span><i style="background:#34d399"></i>Diş</span>
+    </div>
+    <div class="toast" id="toast"></div>
+  </main>
+
+  <aside class="right" id="props"></aside>
+
+  <section class="bottom">
+    <div class="player">
+      <button class="pb" data-pl="start" title="Başa">⏮</button>
+      <button class="pb" data-pl="back" title="Önceki satır">◀|</button>
+      <button class="pb big" data-pl="play" id="playBtn" title="Oynat / Duraklat">▶</button>
+      <button class="pb" data-pl="fwd" title="Sonraki satır">|▶</button>
+      <button class="pb" data-pl="end" title="Sona">⏭</button>
+      <select id="speed" title="Simülasyon hızı">
+        <option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option>
+        <option value="2">2×</option><option value="5">5×</option><option value="10">10×</option><option value="25">25×</option><option value="100">100×</option>
+      </select>
+      <input type="range" id="scrub" min="0" max="1000" value="0">
+      <div class="ptime" id="ptime">0.0 / 0.0 s</div>
+    </div>
+    <div class="btabs">
+      <button class="bt active" data-bt="nc">NC Kod (senkron)</button>
+      <button class="bt" data-bt="sync">Senkronizasyon</button>
+      <button class="bt" data-bt="msgs">Hatalar / Uyarılar <span class="badge" id="msgBadge">0</span></button>
+      <button class="bt" data-bt="verify">Verify</button>
+    </div>
+    <div class="bpanes">
+      <div class="bpane active" id="pane-nc"><div class="nccols"><div class="nccol" id="nc1"></div><div class="nccol" id="nc2"></div></div></div>
+      <div class="bpane" id="pane-sync"><div id="sync"></div></div>
+      <div class="bpane" id="pane-msgs"><div id="msgs"></div></div>
+      <div class="bpane" id="pane-verify"><div id="verify"></div></div>
+    </div>
+  </section>
+</div>
+<div class="modal" id="modal"><div class="mbox"><div class="mhead"><span id="mtitle"></span><button id="mclose">✕</button></div><div class="mbody" id="mbody"></div></div></div>
+<input type="file" id="fileStep" accept=".stp,.step,.STP,.STEP" hidden>
+<input type="file" id="fileProj" accept=".kcam,.json" hidden>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
