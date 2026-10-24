@@ -35,9 +35,21 @@ export function rotaryProfile(t) {
     segs.push({ y0: y - 15, y1: y - 11, r: D / 2 - 3, cut: false });     // pens
     segs.push({ y0: y - 14, y1: y - 3, r: D / 2, cut: false });          // ER somunu
   } else if (holder === 'sleeve') {
-    segs.push({ y0: y - 12, y1: y + 18, r: Math.max(R + 3, 6), cut: false });
+    const sl = sleeveSpan(t);
+    segs.push({ ...sl, cut: false, sleeve: true });
   }
   return { segs, length: Math.max(...segs.map(s => s.y1)), holder };
+}
+
+/** Kovan tutucu (ön kovan bloğu / arka ünite): blokta SABİT konumlu; takımın sapı kovanın içine girer.
+ *  y0: kesici bölgenin hemen arkası (en az 14), y1: blok arka yüzü (ön 58, arka 62). */
+export function sleeveSpan(t) {
+  const R = Math.max(0.3, (t.dia || 3) / 2);
+  const y1 = t.unit === 'front' ? 58 : 62;
+  const fluteLen = Math.max(8, Math.min(45, (t.dia || 3) * 4 + 6));
+  const tipH = R / Math.tan(((t.tipAngle || 118) / 2) * DEG);
+  const cutEnd = t.type === 'center' ? tipH + 6 : t.type === 'tap' || t.type === 'ltap' ? 13 : t.type === 'endmill' ? fluteLen * 0.8 : tipH + fluteLen;
+  return { y0: Math.min(y1 - 10, Math.max(14, cutEnd + 3)), y1, r: Math.max(7, R + 4) };
 }
 
 export function holderType(t) {

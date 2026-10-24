@@ -26,6 +26,7 @@
     "partEject": "M70",
     "barFeedStart": "M6", "barFeedEnd": "M7",
     "programEnd": "M30",
+    "rigidTap": "M29",
     "optionalStop": "M1"
   },
   "waitCode": "M{n}",
@@ -43,5 +44,9 @@
   "cylOff": "G7.1 C0.",
   "polarOn": "G12.1",
   "polarOff": "G13.1",
-  "workShift": "G10 P0 Z{z}"
+  "workShift": "G10 P0 Z{z}",
+  "cycles": { "drill": false, "rigidTap": false, "thread": "g92" },
+  "peckClearance": 0.2,
+  "g76Allowance": 0.05,
+  "g76MinCut": 0.05
 }

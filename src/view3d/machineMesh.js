@@ -349,17 +349,6 @@ export class MachineModel {
       const sp = new THREE.Mesh(new THREE.CylinderGeometry(11, 12, h, 32), mat('darkSteel'));
       sp.position.y = top + h / 2; sp.castShadow = true;
       holder.add(sp);
-    } else if (t.unit === 'front' || t.unit === 'back' || t.unit === 'rear') {
-      // kovan: takım gövdesinden bloğa kadar silindir kovan
-      const bb = new THREE.Box3().setFromObject(g);
-      const R = Math.max(7, (t.dia || 4) / 2 + 4);
-      const sgn = t.unit === 'front' ? 1 : -1;
-      const tail = sgn > 0 ? bb.max.x : -bb.min.x;
-      const x0 = Math.max(14, tail - 14), x1 = t.unit === 'front' ? 58 : 62;
-      if (x1 > x0) {
-        const s = cylX(R, x1 - x0, 'darkSteel', sgn > 0 ? x0 : -x1, 0, 0, holder, 28);
-        s.castShadow = true;
-      }
     }
     parent.add(holder);
     // takım başına malzeme kopyası (aktif olmayanları saydam gösterebilmek için)

@@ -1,6 +1,7 @@
 // Parametrik takım 3D modelleri (ISO ölçülerine yakın). Her takım: uç noktası orijinde,
 // gövde +Y yönünde uzanır (takım -Y yönüne bakar). Makine modeli yönlendirir.
 import * as THREE from 'three';
+import { sleeveSpan } from '../tools/toolGeom.js';
 import { mat } from './materials.js';
 
 const DEG = Math.PI / 180;
@@ -186,7 +187,8 @@ function rotaryTool(t, holderType) {
   if (holderType === 'er') {
     g.add(erNut(y - 14, t.unit === 'cross' && (t.dia || 0) <= 5 ? 'ER11' : 'ER16'));
   } else if (holderType === 'sleeve') {
-    g.add(cyl(Math.max(R + 3, 6), 30, 'blackOx', y - 12));
+    const sl = sleeveSpan(t);                        // kovan blokta sabit (çarpışma geometrisiyle aynı)
+    g.add(cyl(sl.r, sl.y1 - sl.y0, 'blackOx', sl.y0));
   }
   return g;
 }

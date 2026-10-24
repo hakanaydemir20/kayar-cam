@@ -328,17 +328,25 @@ GEN.thread = (prog, ctx, op, tool) => {
   const zStart = r3(f.z0 - Math.max(2 * f.pitch, 1.5));
   const xStart = r3(f.dia + 2);
   goto(prog, ctx, xStart, zStart);
-  for (const d of threadPasses(h, p.firstDepth, p.springPasses)) {
+  if (ctx.project.post.cycles?.thread === 'g76') {
+    // G76 çok pasolu diş çevrimi (FANUC iki bloklu format)
+    prog.cycle({ kind: 'g76', X: r3(f.dia - 2 * h), Z: r3(f.z1), height: h, d1: p.firstDepth, m: Math.max(1, p.springPasses + 1), a: 60, F: f.pitch,
+      dmin: ctx.project.post.g76MinCut ?? 0.05, allow: ctx.project.post.g76Allowance ?? 0.05 });
+  } else for (const d of threadPasses(h, p.firstDepth, p.springPasses)) {
     prog.thread92({ X: r3(f.dia - 2 * d), Z: r3(f.z1) }, f.pitch);
   }
   prog.rapid({ X: ctx.safeX });
 };
 
 function axialDrillCycle(prog, ctx, Zend, peck, F) {
-  // açık hareketlerle gagalama (çevrim parametresine bağımlılık yok)
+  // varsayılan: açık hareketlerle gagalama (çevrim parametresine bağımlılık yok); Post ayarında G83 seçilebilir
   const zr = -1; // yaklaşma (yüzeyden 1 mm önce)
   if (prog.channel === 1) goto(prog, ctx, 0, zr);
   else { prog.rapid({ Z: -5 }); prog.rapid({ X: 0 }); prog.rapid({ Z: zr }); }
+  if (ctx.project.post.cycles?.drill && peck > 0 && peck < Zend) {
+    prog.cycle({ kind: 'g83', Z: r3(Zend), R: 0, Q: r3(peck), F });   // R0: R noktası = başlangıç (dönüş belirsizliği yok)
+    return;
+  }
   if (!peck || peck >= Zend) { prog.line({ Z: r3(Zend) }, F); prog.rapid({ Z: zr }); return; }
   let z = 0;
   while (z < Zend - 1e-6) {
@@ -386,14 +394,22 @@ GEN.drill = (prog, ctx, op, tool) => { frontToolSafe(prog, ctx); drillOnSpindle(
 function tapOnSpindle(prog, ctx, op, tool, which) {
   const f = featureOf(ctx, op, 'axialHole');
   const rpm = lim(ctx, Math.min(rpmFromVc(tool.vc, tool.dia), 800), which);
+  const rigid = !!ctx.project.post.cycles?.rigidTap;
   prog.tool(tool);
   prog.feedMode('rev');
-  prog.spindle({ which, dir: 'cw', rpm });
+  if (!rigid) prog.spindle({ which, dir: 'cw', rpm });   // rijit modda iş mili M29 ile konum kontrolüne alınır (M3 yok)
   const zr = r3(-3 * tool.pitch);
   const depth = r3(f.threadDepth || Math.max(0.5, f.depth - 2 * tool.pitch));
-  prog.comment('YUZER KILAVUZ: G32 + TERS DONUS');
   if (prog.channel === 1) goto(prog, ctx, 0, zr);
   else { prog.rapid({ Z: -5 }); prog.rapid({ X: 0 }); prog.rapid({ Z: zr }); }
+  if (ctx.project.post.cycles?.rigidTap) {
+    prog.comment('RIJIT KILAVUZ: M29 + G84');
+    prog.rigid(which, rpm);
+    prog.cycle({ kind: 'g84', Z: depth, R: 0, F: tool.pitch });
+    prog.spindle({ which, dir: 'stop' });
+    return;
+  }
+  prog.comment('YUZER KILAVUZ: G32 + TERS DONUS');
   prog.thread32({ Z: depth }, tool.pitch);
   prog.spindle({ which, dir: 'ccw', rpm });
   prog.thread32({ Z: zr }, tool.pitch);

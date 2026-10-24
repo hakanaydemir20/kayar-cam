@@ -142,7 +142,7 @@ export function interpret(text, ctx) {
         return;
       }
       const target = { ...S.pos };
-      let hasAxis = false, motion = null, arcC = {}, dwell = null;
+      let hasAxis = false, motion = null, arcC = {}, dwell = null, cycle = null;
       const mcodes = [];
       const isG = (v) => w.some(wd => wd.a === 'G' && Math.abs(wd.v - v) < 1e-9);
       const cylLine = isG(7.1);
@@ -171,7 +171,9 @@ export function interpret(text, ctx) {
             else if (gv === 99) S.feedMode = 'rev';
             else if (gv === 50) S._g50 = true;
             else if (gv === 54 || gv === 55 || gv === 56) { /* ön geçişte işlendi */ }
-            else if ([21, 40, 80].includes(gv)) { /* güvenli varsayılanlar */ }
+            else if (gv === 83 || gv === 84 || gv === 76) cycle = gv;
+            else if (gv === 80) { S.rigid = false; }
+            else if ([21, 40].includes(gv)) { /* güvenli varsayılanlar */ }
             else warn(li, 'Simülasyonda desteklenmeyen G kodu: ' + g);
             break;
           }
@@ -206,6 +208,7 @@ export function interpret(text, ctx) {
             break;
           }
           case 'T': break; // ön geçişte işlendi
+          case 'Q': break; // çevrim parametresi (aşağıda)
           case 'M': mcodes.push(normCode('M' + wd.v)); break;
           default: warn(li, 'Desteklenmeyen adres: ' + wd.a);
         }
@@ -235,12 +238,14 @@ export function interpret(text, ctx) {
           case 'coolantOn': case 'backCoolantOn': S.coolant = true; break;
           case 'coolantOff': case 'backCoolantOff': S.coolant = false; break;
           case 'mainCAxisOn': S.cAxis = true; break; case 'mainCAxisOff': S.cAxis = false; break;
+          case 'rigidTap': S.rigid = true; break;
           case 'subCAxisOn': S.subCAxis = true; break; case 'subCAxisOff': S.subCAxis = false; break;
         }
         pushMove({ kind: 'event', line: li, event: key, from: { ...S.pos }, to: { ...S.pos }, dur: eventTime(key) });
       }
 
       if (dwell != null) { pushMove({ kind: 'dwell', line: li, from: { ...S.pos }, to: { ...S.pos }, dur: dwell }); return; }
+      if (cycle) { runCycle(li, cycle, w); return; }
       if (motion) S.motion = motion;
       if (!hasAxis) return;
       if (S.polar) { polarMove(li, hypT, target); return; }
@@ -292,6 +297,81 @@ export function interpret(text, ctx) {
       if (S.motion !== 'G92') S._inG92 = false;
       S.pos = target;
     });
+
+    /** Sabit çevrimler (post'un yazdığı biçim): G83 Z R Q F (R0), G84 Z R F (M29 rijit), G76 iki blok */
+    function runCycle(li, code, w) {
+      const v = (a) => { const wd = w.find(x => x.a === a); return wd ? wd.v : null; };
+      const raw = (a) => { const wd = w.find(x => x.a === a); return wd ? wd.raw : null; };
+      const push = (kind, a, b, extra = {}) => {
+        const dur = kind === 'rapid' ? rapidTime(a, b) : (dist(a, b) / extra.feed) * 60;
+        pushMove({ kind, line: li, from: { ...a }, to: { ...b }, dur, ...extra });
+      };
+      if (code === 76) {
+        if (v('X') == null || v('Z') == null) {
+          const pr = String(raw('P') || '').replace(/\..*/, '').padStart(6, '0');
+          S.g76 = { m: +pr.slice(0, 2), r: +pr.slice(2, 4), a: +pr.slice(4, 6), dmin: (v('Q') ?? 0) / 1000, d: v('R') ?? 0 };
+          return;
+        }
+        if (!S.g76) { err(li, 'G76 ikinci blok: önce ilk blok (G76 P… Q… R…) gerekli'); return; }
+        if (S.spindle[workSpindle()].dir === 'stop') err(li, 'Diş çekerken iş mili duruyor');
+        const k = (v('P') ?? 0) / 1000, d1 = (v('Q') ?? 0) / 1000, Xr = v('X'), Zend = v('Z');
+        const { m, dmin, d } = S.g76;
+        if (!(k > 0) || !(d1 > 0)) { err(li, 'G76: diş yüksekliği (P) ve ilk paso (Q) > 0 olmalı'); return; }
+        const start = { ...S.pos };
+        if (Xr >= start.X) { err(li, 'G76: yalnız dış diş (X başlangıç noktasından küçük) desteklenir'); return; }
+        checkLimits(li, { ...start, X: Xr, Z: Zend });
+        const f = feedMmMin(li, true), rpm = curRpm(li);
+        const depths = [];
+        for (let n = 1, prev = 0; ; n++) {
+          let dn = d1 * Math.sqrt(n);
+          if (dn - prev < dmin) dn = prev + dmin;
+          if (dn >= k - d - 1e-9) { if (k - d > prev + 1e-9) depths.push(k - d); break; }
+          depths.push(dn); prev = dn;
+        }
+        for (let j = 0; j < Math.max(1, m); j++) depths.push(k);
+        const Xc = Xr + 2 * k;                      // diş tepe çapı
+        for (const dn of depths) {
+          const p1 = { ...start, X: Xc - 2 * dn }, p2 = { ...p1, Z: Zend }, p3 = { ...p2, X: start.X };
+          push('rapid', start, p1);
+          pushMove({ kind: 'thread', line: li, from: p1, to: p2, feed: f, rpm, dur: (dist(p1, p2) / f) * 60 });
+          push('rapid', p2, p3); push('rapid', p3, start);
+        }
+        S.pos = start;
+        return;
+      }
+      // G83 / G84: Z ekseninde (ön/arka eksenel)
+      const zb = v('Z'), R = v('R') ?? 0;
+      if (zb == null) { err(li, `G${code}: Z (delik dibi) gerekli`); return; }
+      const z0 = S.pos.Z, zr = z0 + R, dir = Math.sign(zb - zr) || 1;
+      checkLimits(li, { ...S.pos, Z: zb });
+      requireCutReady(li);
+      const at = (z) => ({ ...S.pos, Z: z });
+      if (zr !== z0) push('rapid', at(z0), at(zr));
+      if (code === 83) {
+        const q = (v('Q') ?? 0) / 1000;
+        if (!(q > 0)) { err(li, 'G83: gagalama (Q) > 0 olmalı'); return; }
+        const clr = profile.peckClearance ?? 0.2, f = feedMmMin(li), rpm = curRpm(li);
+        let z = zr;
+        while (dir * (zb - z) > 1e-9) {
+          const zn = dir > 0 ? Math.min(zb, z + q) : Math.max(zb, z - q);
+          const zs = z === zr ? zr : z - dir * clr;
+          if (zs !== zr) push('rapid', at(zr), at(zs));
+          push('feed', at(zs), at(zn), { feed: f, rpm });
+          push('rapid', at(zn), at(zr));
+          z = zn;
+        }
+      } else {
+        if (!S.rigid) { err(li, 'G84 rijit kılavuz için önce M29 S… gerekli'); return; }
+        const sp = S.spindle[workSpindle()];
+        if (!(sp.rpm > 0)) { err(li, 'M29 için devir (S) tanımsız'); return; }
+        if (S.feedMode !== 'rev') warn(li, 'G84: G99 (devir başına) ile F = hatve olmalı');
+        const f = (S.F || 0) * sp.rpm;
+        push('feed', at(zr), at(zb), { feed: f, rpm: sp.rpm });
+        push('feed', at(zb), at(zr), { feed: f, rpm: sp.rpm });
+      }
+      if (zr !== z0) push('rapid', at(zr), at(z0));
+      S.pos = at(z0);
+    }
 
     /** Polar interpolasyon (G12.1): hipotetik (x, y) doğrusu → gerçek X (çap) / C (derece), küçük adımlarla */
     function polarMove(li, hT, target) {

@@ -99,6 +99,7 @@ function postPath(prog, P, meta, pi) {
     return ' F' + f;
   };
   const motion = (g) => { if (st.motion === g) return ''; st.motion = g; return g + ' '; };
+  const feedWordForce = (F) => { const d = st.feedMode === 'rev' ? 4 : 1; const f = fmt(F, d); st.F = f; return ' F' + f; };
   const note = (pos) => {
     if (st.polar) return; // polar modda program X/C hipotetiktir (öz-kontrol yorumlayıcının dönüşümüyle ayrıca yapılır)
     for (const a of ['X', 'Y', 'Z', 'C']) if (pos[a] != null && !(a === 'Y' && prog.channel === 2)) intent[a] = a === 'Z' && prog.channel === 1 && meta.zShift ? +pos[a] - meta.zShift : +pos[a];
@@ -203,6 +204,29 @@ function postPath(prog, P, meta, pi) {
       case 'shift': {
         emit((P.workShift || 'G10 P0 Z{z}').replace('{z}', fmt(it.z, dec)));
         delete st.pos.Z; delete intent.Z; // program Z'nin anlamı değişti
+        break;
+      }
+      case 'rigid': {
+        const addr = { main: P.spindleAddress.main, sub: P.spindleAddress.sub }[it.which] || '';
+        emit((C.rigidTap || 'M29') + ' ' + addr + fmtInt(it.rpm));
+        break;
+      }
+      case 'cycle': {
+        const um = (v) => String(Math.round(v * 1000));   // P/Q: en küçük birim (µm), ondalık noktasız
+        const zz = (v) => fmt(v - (prog.channel === 1 && meta.zShift ? meta.zShift : 0), dec);
+        if (it.kind === 'g83') {
+          emit('G83 Z' + zz(it.Z) + ' R' + fmt(it.R, dec) + ' Q' + um(it.Q) + feedWordForce(it.F));
+        } else if (it.kind === 'g84') {
+          emit('G84 Z' + zz(it.Z) + ' R' + fmt(it.R, dec) + ' F' + fmt(it.F, 4));
+          st.F = null;
+        } else if (it.kind === 'g76') {
+          const pmra = String(it.m).padStart(2, '0') + '00' + String(it.a).padStart(2, '0');
+          emit('G76 P' + pmra + ' Q' + um(it.dmin) + ' R' + fmt(it.allow, dec));
+          emit('G76 X' + fmt(it.X, dec) + ' Z' + zz(it.Z) + ' R0. P' + um(it.height) + ' Q' + um(it.d1) + ' F' + fmt(it.F, 4));
+          st.F = null;
+        } else throw new Error('Bilinmeyen çevrim: ' + it.kind);
+        emit('G80');
+        st.motion = null;
         break;
       }
       case 'cyl': {

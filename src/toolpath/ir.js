@@ -31,6 +31,10 @@ export class Prog {
   cyl(r) { return this.push({ k: 'cyl', r }); }
   /** iş koordinatı kaydırması ($1 Z): makine Z1 = program Z + z */
   workShift(z) { return this.push({ k: 'shift', z }); }
+  /** sabit çevrim: {kind:'g83'|'g84'|'g76', ...} (post G80 ile kapatır) */
+  cycle(c) { return this.push({ ...c, k: 'cycle' }); }
+  /** rijit kılavuz modu (M29 S…) */
+  rigid(which, rpm) { return this.push({ k: 'rigid', which, rpm }); }
   /** polar interpolasyon aç/kapa (X çap, C hipotetik mm) */
   polar(on) { return this.push({ k: 'polar', on }); }
   blank() { return this.push({ k: 'blank' }); }

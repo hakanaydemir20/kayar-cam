@@ -82,19 +82,13 @@ export function toolBodies(t) {
   if (t.unit === 'front') {
     // eksenel: gövde +x, uç x = 0 (burca bakar)
     const cy = t.xPos || 0, cz = t.yPos;
-    const pr = rotaryProfile(t);
-    for (const s of pr.segs) out.push(cyl(s.y0, s.y1, s.r, s.r, { cy, cz, ...tag, cut: s.cut }));
-    const R = Math.max(7, (t.dia || 4) / 2 + 4), x0 = Math.max(14, pr.length - 14), x1 = 58;
-    if (x1 > x0) out.push(cyl(x0, x1, R, R, { cy, cz, ...tag, cut: false, sleeve: true }));
+    for (const s of rotaryProfile(t).segs) out.push(cyl(s.y0, s.y1, s.r, s.r, { cy, cz, ...tag, cut: s.cut }));
     return out;
   }
   // arka ünite / arka kovan (dünya): uç x = backToolX, gövde −x
   const X = LAYOUT.backToolX, cz = LAYOUT.backLat + t.yPos;
   if (isRotaryType(t)) {
-    const pr = rotaryProfile(t);
-    for (const s of pr.segs) out.push(cyl(X - s.y1, X - s.y0, s.r, s.r, { cy: 0, cz, ...tag, cut: s.cut }));
-    const R = Math.max(7, (t.dia || 4) / 2 + 4), x0 = Math.max(14, pr.length - 14), x1 = 62;
-    if (x1 > x0) out.push(cyl(X - x1, X - x0, R, R, { cy: 0, cz, ...tag, cut: false, sleeve: true }));
+    for (const s of rotaryProfile(t).segs) out.push(cyl(X - s.y1, X - s.y0, s.r, s.r, { cy: 0, cz, ...tag, cut: s.cut }));
   } else {
     // eksenel bağlanan tornalama takımı: sap −x, kesici uç radyal dışarı (+z) — bkz. backTurn
     out.push(box(X - 10, X, -1.8, 1.8, cz, cz + 11.5, { ...tag, cut: true }));
