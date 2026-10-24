@@ -106,7 +106,7 @@ function turningTool(t) {
   screw.position.set(insert.position.x + v3[0] * 0.55 + v1[0] * 0.2, insert.position.y + 4.5, 1.7);
   g.add(screw);
   // tutucu başı + sap
-  const head = box(14, 10, 12, 'blackOx', 6.5, 10.5, 0);
+  const head = box(14, 10, 12, 'blackOx', 7.5, 10.5, 0);   // baş, uç düzleminin gerisine (burç tarafına) taşmaz
   g.add(head);
   const shank = box(12, 80, 12, 'blackOx', 7, 55, 0);
   g.add(shank);
@@ -119,9 +119,10 @@ function bladeTool(t) {
   const w = t.width || 2;
   const tip = box(w, 3.5, 4, 'tin', -w / 2, 1.75, 0);
   g.add(tip);
-  const blade = box(w * 0.85, 22, 20, 'darkSteel', -w / 2, 13, 6);
+  // Swiss gang bıçak tutucusu: bıçak sapa ortalı, ~12 mm yükseklik (komşu takımlara taşmaz)
+  const blade = box(w * 0.85, 22, 12, 'darkSteel', -w / 2, 13, 0);
   g.add(blade);
-  const clamp = box(w * 0.85 + 8, 12, 24, 'blackOx', -w / 2 + 2, 28, 6);
+  const clamp = box(w * 0.85 + 8, 12, 14, 'blackOx', -w / 2 + 2, 28, 0);
   g.add(clamp);
   const shank = box(12, 70, 12, 'blackOx', 4, 64, 0);
   g.add(shank);
@@ -132,13 +133,14 @@ function bladeTool(t) {
 function threadTool(t) {
   const g = new THREE.Group();
   const sh = new THREE.Shape();
-  sh.moveTo(0, 0); sh.lineTo(3.5, 6); sh.lineTo(-3.5, 6); sh.closePath();
+  // 60° profil uç; tutucu burç tarafına (−x) taşmaz (uç burçtan 3.2 mm önde çalışır)
+  sh.moveTo(0, 0); sh.lineTo(3, 5.2); sh.lineTo(-3, 5.2); sh.closePath();
   const ig = new THREE.ExtrudeGeometry(sh, { depth: 3.5, bevelEnabled: false });
   ig.translate(0, 0, -1.75);
   const ins = new THREE.Mesh(ig, mat('tin'));
   g.add(ins);
-  g.add(box(14, 10, 12, 'blackOx', 0, 10.5, 0));
-  g.add(box(12, 80, 12, 'blackOx', 1, 55, 0));
+  g.add(box(14, 10, 12, 'blackOx', 5, 10.5, 0));
+  g.add(box(12, 80, 12, 'blackOx', 6, 55, 0));
   return g;
 }
 

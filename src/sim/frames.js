@@ -7,7 +7,7 @@
 export const LAYOUT = {
   bushFace: -3.2,     // kılavuz burç alnı (dünya x)
   backToolX: 130,     // arka ünite takım uçları (dünya x), +x yönüne bakar
-  backLat: -110,      // arka ünitenin yanal konumu (dünya z, operatörün karşı tarafı)
+  backLat: -125,      // arka ünitenin yanal konumu (dünya z, operatörün karşı tarafı)
 };
 
 const gangTool = (t) => t && (t.unit === 'gang' || t.unit === 'cross' || t.unit === 'front') ? t : null;

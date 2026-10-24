@@ -76,6 +76,7 @@ describe('arka tornalama (alın payı + geriye bakan omuz) ve G12.1 arka alın �
   p.ops = p.ops.filter(o => o.type !== 'groove');
   const cut = p.ops.find(o => o.type === 'cutoff');
   cut.params.backStock = 0.3;
+  p.ops.find(o => o.type === 'pickoff').params.grip = 4;   // kısa parça: pens somunu komşu takıma yaklaşmasın
   const iPick = p.ops.findIndex(o => o.type === 'backPolar');
   p.ops.splice(iPick, 0, makeOp('backTurn', tool(p, 42).id));
   const { r, ss, c } = verify(p);

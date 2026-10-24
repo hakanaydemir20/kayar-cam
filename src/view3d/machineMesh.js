@@ -12,11 +12,11 @@ import { LAYOUT } from '../sim/frames.js';
 import { StockMesh } from './stockMesh.js';
 import { buildCabin } from './cabin.js';
 import { numberStrip, crossBlockTex, decalPlane, labelSprite } from './decals.js';
-import { movePoint } from '../sim/interpreter.js';
+import { poseOf } from '../sim/pose.js';
+import { bushBodies, gangBodies, subBodies, backBodies, SUB_NUT, PAN_Y } from '../sim/bodies.js';
 
 const HEAD_K = 310;       // başlık pens alnı = parça ön alnı − HEAD_K
 const DEG = Math.PI / 180;
-const PAN_Y = -330;       // talaş teknesi üstü
 const GANG = (t) => t.unit === 'gang' || t.unit === 'cross' || t.unit === 'front';
 
 function rbox(w, h, d, m, x, y, z, parent, rad = 3) {
@@ -54,6 +54,19 @@ function ringX(rOut, rIn, len, m, x0, parent) {
   parent && parent.add(mesh);
   return mesh;
 }
+/** bodies.js gövdesinden mesh (kutu: yuvarlatılmış; x silindiri/koni: delikli olabilir; y silindiri) */
+function bodyMesh(bd, parent) {
+  const m = bd.mat || 'darkSteel';
+  if (bd.t === 'box') { const [x0, x1, y0, y1, z0, z1] = bd.b; return rb(x0, x1, y0, y1, z0, z1, m, parent, bd.r ?? 2); }
+  if (bd.t === 'cyl') {
+    if (bd.bore != null && bd.r0 === bd.r1) { const r = ringX(bd.r0, bd.bore, bd.x1 - bd.x0, m, bd.x0, parent); r.position.y = bd.cy; r.position.z = bd.cz; return r; }
+    return cylX(bd.r1, bd.x1 - bd.x0, m, bd.x0, bd.cy, bd.cz, parent, 64, bd.r0);
+  }
+  const g = new THREE.CylinderGeometry(bd.r, bd.r, bd.y1 - bd.y0, 32);
+  const c = new THREE.Mesh(g, mat(m)); c.position.set(bd.cx, (bd.y0 + bd.y1) / 2, bd.cz); c.castShadow = true; parent.add(c);
+  return c;
+}
+
 /** Altıgen lokmalı (imbus) civata başı, +x yüzüne bakar */
 function boltX(parent, x, y, z, r = 3.2) {
   const h = cylX(r, 2.6, 'blackOx', x, y, z, parent, 20);
@@ -144,14 +157,12 @@ export class MachineModel {
     // ---- iç taban: kılavuz burç sütunu ve kızak yatakları ----
     this.inner = new THREE.Group(); R.add(this.inner);
     const I = this.inner;
-    rb(-75, -17, PAN_Y, 300, -300, 250, 'paint', I, 8);                         // burç sütunu (gang kızağı önünde)
-    rb(-78, 80, 250, 330, -300, 250, 'starBlue', I, 10);                         // mavi üst kapak
-    cylX(56, 7, 'paintMid', -23.5, 0, 0, I, 64);                                 // burç yuvası (sütun yüzünden 1.5 mm önde)
-    // yüzler farklı düzlemlerde (eş düzlemli yüzler titreşir): flanş −1.0, somun −0.5, burç 0
-    ringX(31, 17, 13, 'steel', LAYOUT.bushFace - 14, I);                         // burç tutucu flanşı
-    for (let k = 0; k < 6; k++) { const a = k * Math.PI / 3 + 0.5; boltX(I, LAYOUT.bushFace - 1, 24 * Math.cos(a), 24 * Math.sin(a), 2.4); }
-    ringX(17, 11, 9, 'darkSteel', LAYOUT.bushFace - 9.5, I);                     // burç somunu
-    colletFace(I, LAYOUT.bushFace, 11, barR + 0.02, 1);                          // kılavuz burç
+    // burç ünitesi: çarpışma kontrolüyle aynı gövdeler (ince konik uç; çapraz takım pens somunları üstünden geçer)
+    for (const bd of bushBodies()) bodyMesh(bd, I);
+    rb(-98, 80, 250, 330, -300, 250, 'starBlue', I, 10);                         // mavi üst kapak
+    cylX(56, 1.5, 'paintMid', -32, 0, 0, I, 64);                                 // burç yuvası (sütun yüzünde ince halka)
+    for (let k = 0; k < 6; k++) { const a = k * Math.PI / 3 + 0.5; boltX(I, -26, 28.5 * Math.cos(a), 28.5 * Math.sin(a), 1.8); }
+    colletFace(I, LAYOUT.bushFace, 11, barR + 0.02, 1);                          // kılavuz burç (somunun önünde)
     // karşı iş mili ve arka ünite tablası
     rb(40, 560, PAN_Y, PAN_Y + 26, -230, 130, 'castDark', I, 5);
     for (const z of [-60, 60]) rb(60, 540, PAN_Y + 26, PAN_Y + 36, z - 9, z + 9, 'chrome', I, 2);
@@ -190,57 +201,51 @@ export class MachineModel {
     const G = this.gang = new THREE.Group(); this.root.add(G);
     const all = P.tools.filter(GANG);
     for (const t of all) this.addTool(t, G);
-    const turn = all.filter(t => t.unit === 'gang'), cross = all.filter(t => t.unit === 'cross'), front = all.filter(t => t.unit === 'front');
     const zs = all.map(t => t.yPos);
-    const zMin = Math.min(...zs, 0) - 22, zMax = Math.max(...zs, 0) + 30;
-    this.gangZ = [zMin, zMax];
-    // X1/Y1 kızağı (tool post gövdesi) + mavi kapak şeridi
-    rb(-14, 52, 120, 178, zMin, zMax, 'paint', G, 6);
-    rb(-16, 54, 178, 186, zMin - 2, zMax + 2, 'starBlue', G, 3);
-    // tornalama takımları: siyah bağlama blokları (2 civata), üstte numara şeridi
-    if (turn.length) {
-      const a = Math.min(...turn.map(t => t.yPos)) - 8, b = Math.max(...turn.map(t => t.yPos)) + 8;
-      rb(-12, 34, 86, 120, a - 3, b + 3, 'castDark', G, 3);                     // takım tutucu plakası
-      for (const t of turn) {
-        const z = t.yPos;
-        rb(-2, 19, 38, 88, z - 6.8, z + 6.8, 'blackOx', G, 1.5);
-        rb(15, 19.4, 60, 88, z - 1.1, z + 1.1, 'rubber', G, 0.4);              // sıkma yarığı
+    this.gangZ = [Math.min(...zs, 0) - 22, Math.max(...zs, 0) + 30];
+    // ünite gövdeleri: çarpışma kontrolüyle aynı liste (takım gövdeleri hariç — takımlar ayrıntılı modelle çizilir)
+    for (const bd of gangBodies(P.tools)) {
+      if (bd.tool || bd.spindleOf) continue;
+      if (bd.motor) {
+        const [x0, x1, y0, y1, z0, z1] = bd.b;
+        const mg = new THREE.CylinderGeometry((x1 - x0) / 2, (x1 - x0) / 2, z1 - z0, 32); mg.rotateX(Math.PI / 2);
+        const mot = new THREE.Mesh(mg, mat(bd.mat)); mot.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2); mot.castShadow = true; G.add(mot);
+        continue;
+      }
+      const m = bodyMesh(bd, G);
+      if (bd.strip === 'front' || /Kovan bloğu kolu/.test(bd.name || '')) {
+        // kovan bloğu: kovan takımı kullanılmıyorken "aktif + saydam" modunda saydam (görüşü kapatmasın)
+        m.material = m.material.clone(); (this.frontUnit ||= []).push(m.material);
+      }
+      if (bd.clamp) { // bağlama bloğu: sıkma yarığı + 2 civata
+        const z = bd.clamp.yPos;
+        rb(15, 19.4, 60, 88, z - 1.1, z + 1.1, 'rubber', G, 0.4);
         boltX(G, 19, 50, z - 3.4); boltX(G, 19, 74, z - 3.4);
       }
-      const nums = [...turn].sort((p, q) => q.yPos - p.yPos);
-      const strip = decalPlane(b - a, 22, numberStrip(nums.map(t => t.num), 64 * nums.length, 64, { circleFirst: true }));
-      strip.rotation.y = Math.PI / 2; strip.position.set(34.2, 103, (a + b) / 2); G.add(strip);
-    }
-    // çapraz tahrikli blok (açık gri, +X1/±Y1 etiketi), iş milleri alttan çıkar
-    if (cross.length) {
-      const a = Math.min(...cross.map(t => t.yPos)) - 12, b = Math.max(...cross.map(t => t.yPos)) + 12;
-      rb(-14, 46, 50, 122, a, b, 'paint', G, 5);
-      const nums = [...cross].sort((p, q) => p.num - q.num).map(t => t.num);
-      const lab = decalPlane(Math.min(64, b - a - 4), 64, crossBlockTex(nums));
-      lab.rotation.y = Math.PI / 2; lab.position.set(46.2, 88, (a + b) / 2); G.add(lab);
-      const mg = new THREE.CylinderGeometry(19, 19, 52, 32); mg.rotateX(Math.PI / 2);
-      const mot = new THREE.Mesh(mg, mat('starBlue')); mot.position.set(14, 92, a - 30); mot.castShadow = true; G.add(mot);
-      rb(-6, 34, 72, 112, a - 8, a, 'castDark', G, 3);
-    }
-    // kovan takımları (ön): tornalama takımlarının altında siyah blok, turuncu boğumlu hortumlar
-    if (front.length) {
-      const a = Math.min(...front.map(t => t.yPos)) - 11, b = Math.max(...front.map(t => t.yPos)) + 11;
-      const xc = front[0].xPos || 0;
-      // blok x ≤ 60: karşı iş mili parça alırken (pens alnı ≈ x 19+, ön basamak x 63+) çakışmaz
-      const za = Math.min(a, 0);
-      rb(30, 60, xc - 14, xc + 14, za, b, 'blackOx', G, 3);
-      // tutucu kolu: tornalama takımları ile çapraz blok arasında (yanal 0…9), tool post kızağına bağlanır
-      rb(22, 36, xc - 14, 120, za, za + 9, 'castDark', G, 3);
-      for (const t of front) {
-        boltX(G, 60, xc + 7, t.yPos + 5, 2.6);
-        const v = this.tools.get(t.id);
-        // hortum, takım tutucusunun yerel çerçevesinde (uç orijinde)
-        v.hose = new THREE.Group(); v.holder.add(v.hose);
-        locLine(v.hose, [[44, 15, -6], [34, 17, -6], [22, 13, -5], [11, 7, -3.5]], t.num % 2 ? 'locline' : 'locBlue', 0.85);
+      if (bd.strip === 'turn') {
+        const turn = all.filter(t => t.unit === 'gang').sort((p, q) => q.yPos - p.yPos);
+        const [, x1, , , z0, z1] = bd.b;
+        const strip = decalPlane(z1 - z0 - 6, 22, numberStrip(turn.map(t => t.num), 64 * turn.length, 64, { circleFirst: true }));
+        strip.rotation.y = Math.PI / 2; strip.position.set(x1 + 0.2, 103, (z0 + z1) / 2); G.add(strip);
+      } else if (bd.strip === 'cross') {
+        const nums = all.filter(t => t.unit === 'cross').sort((p, q) => p.num - q.num).map(t => t.num);
+        const [, x1, , , z0, z1] = bd.b;
+        const lab = decalPlane(Math.min(64, z1 - z0 - 4), 64, crossBlockTex(nums));
+        lab.rotation.y = Math.PI / 2; lab.position.set(x1 + 0.2, 88, (z0 + z1) / 2); G.add(lab);
+      } else if (bd.strip === 'front') {
+        const front = all.filter(t => t.unit === 'front');
+        const [, x1, y0, y1] = bd.b;
+        for (const t of front) {
+          boltX(G, x1, (y0 + y1) / 2 + 7, t.yPos + 5, 2.6);
+          const v = this.tools.get(t.id);
+          v.hose = new THREE.Group(); v.holder.add(v.hose);   // hortum takım çerçevesinde (uç orijinde)
+          locLine(v.hose, [[44, 13, -6], [34, 15, -6], [22, 12, -5], [11, 7, -3.5]], t.num % 2 ? 'locline' : 'locBlue', 0.85);
+        }
+        const fs = [...front].sort((p, q) => q.yPos - p.yPos);
+        const a = Math.min(...front.map(t => t.yPos)) - 11, b2 = Math.max(...front.map(t => t.yPos)) + 11;
+        const strip = decalPlane(b2 - a, 10, numberStrip(fs.map(t => t.num), 64 * fs.length, 48, { bg: '#24262a', fg: '#e9ecef' }));
+        strip.rotation.y = Math.PI / 2; strip.position.set(x1 + 0.3, (y0 + y1) / 2 - 7, (a + b2) / 2); G.add(strip);
       }
-      const nums = [...front].sort((p, q) => q.yPos - p.yPos).map(t => t.num);
-      const strip = decalPlane(b - a, 12, numberStrip(nums, 64 * nums.length, 48, { bg: '#24262a', fg: '#e9ecef' }));
-      strip.rotation.y = Math.PI / 2; strip.position.set(60.3, xc - 9, (a + b) / 2); G.add(strip);
     }
   }
 
@@ -248,16 +253,9 @@ export class MachineModel {
   buildSub(barR) {
     const S = this.sub = new THREE.Group(); this.root.add(S);
     this.subNose = new THREE.Group(); S.add(this.subNose);
-    ringX(18, 9.5, 10, 'chrome', -10, this.subNose);                            // pens somunu
-    colletFace(this.subNose, -10.4, 9.5, barR + 0.3, -1);
-    for (let k = 0; k < 4; k++) { const s2 = box(8, 3.5, 3, 'blackOx', -5, 0, 0, this.subNose); const a = k * Math.PI / 2; s2.position.y = 17.5 * Math.cos(a); s2.position.z = 17.5 * Math.sin(a); }
-    cylX(24, 24, 'steel', 0, 0, 0, S, 64);
-    cylX(32, 10, 'darkSteel', 24, 0, 0, S, 64);
-    rb(34, 96, -36, 36, -38, 38, 'white', S, 9);                                 // ön basamak
-    rb(96, 262, -58, 52, -50, 50, 'white', S, 14);                               // gövde
-    rb(150, 250, 52, 60, -40, 40, 'paintMid', S, 3);
-    rb(84, 250, PAN_Y + 36 - 0, -58, -42, 42, 'paint', S, 6);                    // X2/Z2 kızağı
-    rb(80, 254, PAN_Y + 36, PAN_Y + 52, -48, 48, 'castDark', S, 3);
+    for (const bd of subBodies(barR)) bodyMesh(bd, bd.collet ? this.subNose : S);
+    colletFace(this.subNose, -SUB_NUT - 0.4, 9.5, barR + 0.3, -1);
+    for (let k = 0; k < 4; k++) { const s2 = box(8, 3.5, 3, 'blackOx', -SUB_NUT / 2, 0, 0, this.subNose); const a = k * Math.PI / 2 + Math.PI / 4; s2.position.y = 17.6 * Math.cos(a); s2.position.z = 17.6 * Math.sin(a); }
   }
 
   // ---------------------------------------------------------------- arka ünite (sabit, mavi)
@@ -266,11 +264,8 @@ export class MachineModel {
     this.back = new THREE.Group(); this.root.add(this.back);
     const bt = P.tools.filter(t => t.unit === 'back' || t.unit === 'rear');
     if (!bt.length) return;
-    const bz = bt.map(t => LAYOUT.backLat + t.yPos);
-    const a = Math.min(...bz) - 13, b = Math.max(...bz) + 13;
+    for (const bd of backBodies(P.tools)) if (!bd.tool) bodyMesh(bd, this.back);
     const X = LAYOUT.backToolX;
-    rb(X - 62, X - 30, -22, 22, a, b, 'starBlue', this.back, 4);
-    rb(X - 70, X - 30, PAN_Y + 26, -22, a + 4, b - 4, 'paint', this.back, 5);
     for (const t of bt) { boltX(this.back, X - 30, 15, LAYOUT.backLat + t.yPos, 2.2); boltX(this.back, X - 30, -15, LAYOUT.backLat + t.yPos, 2.2); }
     for (const t of bt) this.addTool(t, this.back);
   }
@@ -340,7 +335,11 @@ export class MachineModel {
       g.rotation.z = -Math.PI / 2;                    // gövde +x, uç −x'e bakar
       holder.position.set(0, t.xPos || 0, t.yPos);
     } else {
-      g.rotation.z = Math.PI / 2;                     // gövde −x, uç +x'e bakar
+      if (isRotary(t)) g.rotation.z = Math.PI / 2;     // gövde −x, uç +x'e bakar
+      else {
+        // eksenel bağlanan tornalama takımı: sap −x, kesici uç radyal dışarı (+z) — bodies.js ile aynı
+        g.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(0, 0, 1), new THREE.Vector3(-1, 0, 0), new THREE.Vector3(0, -1, 0)));
+      }
       holder.position.set(LAYOUT.backToolX, 0, LAYOUT.backLat + t.yPos);
     }
     if (t.unit === 'cross') {
@@ -390,7 +389,7 @@ export class MachineModel {
   update(stockSim, t, dt) {
     const st = stockSim.state;
     const m1 = stockSim.currentMove(1), m2 = stockSim.currentMove(2);
-    const pose1 = poseOf(m1, t), pose2 = poseOf(m2, t);
+    const pose1 = poseOf(m1, t, 1, this.project.machine), pose2 = poseOf(m2, t, 2, this.project.machine);
     this.pose1 = pose1; this.pose2 = pose2; this.m1 = m1; this.m2 = m2;
     // ana parça ön alnı (dünya x)
     const front = stockSim.mainFrontWorld(pose1.m.Z);
@@ -443,6 +442,10 @@ export class MachineModel {
     this.activeTool1 = tool1; this.activeTool2 = s2 ? s2.tool : null;
     // takım görünürlüğü: all | ghost | active
     const mode = this.toolMode || 'ghost';
+    if (this.frontUnit) {
+      const a = mode === 'all' || (tool1 && tool1.unit === 'front') ? 1 : 0.22;
+      if (a !== this._frontAlpha) { for (const m of this.frontUnit) { m.transparent = a < 1; m.opacity = a; m.depthWrite = a === 1; m.needsUpdate = true; } this._frontAlpha = a; }
+    }
     for (const [, v] of this.tools) {
       const act = v.tool === this.activeTool1 || v.tool === this.activeTool2;
       const a = act || mode === 'all' ? 1 : mode === 'ghost' ? 0.12 : 0;
@@ -463,15 +466,4 @@ function spinStep(m, dt, dir, which = 'main') {
   return dir === 'ccw' ? -vis : vis;
 }
 
-export function poseOf(m, t) {
-  if (!m) return { p: { X: 25, Y: 0, Z: -1, C: 0 }, m: { X: 25, Y: 0, Z: -1, C: 0 } };
-  const f = m.t1 > m.t0 ? Math.min(1, Math.max(0, (t - m.t0) / (m.t1 - m.t0))) : 1;
-  const p = movePoint(m, f);
-  const a = m.mFrom, b = m.mTo;
-  let mm;
-  if (m.kind === 'arc') {
-    // yay: program noktasını makineye çevirmek için doğrusal ofset farkı yeterli (ofset sabit)
-    mm = { X: p.X + (a.X - m.from.X), Y: p.Y + (a.Y - m.from.Y), Z: p.Z + (a.Z - m.from.Z), C: p.C };
-  } else mm = { X: a.X + (b.X - a.X) * f, Y: a.Y + (b.Y - a.Y) * f, Z: a.Z + (b.Z - a.Z) * f, C: a.C + (b.C - a.C) * f };
-  return { p, m: mm, f };
-}
+export { poseOf };

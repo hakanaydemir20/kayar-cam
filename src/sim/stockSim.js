@@ -2,6 +2,8 @@
 // d = parça ön alnından mesafe (mm). θ parça çerçevesinde açı (0 = +y, artış +z yönüne).
 // Yorumlanmış G-kod hareketleri zaman sırasında uygulanır; G0 ile malzemeye temas çarpışma sayılır.
 import { movePoint } from './interpreter.js';
+import { poseOf } from './pose.js';
+import { Collider } from './collision.js';
 
 const DEG = Math.PI / 180;
 
@@ -194,7 +196,7 @@ function shapeFor(tool) {
  * Simülasyon motoru. step(t) ile zamanda ileri gider.
  */
 export class StockSim {
-  constructor(project, sim) {
+  constructor(project, sim, opts = {}) {
     this.project = project;
     this.sim = sim;
     const L = project.part.length;
@@ -208,6 +210,7 @@ export class StockSim {
     for (const p of sim.paths) for (const m of p.moves) this.moves.push(m);
     this.moves.sort((a, b) => a.t0 - b.t0 || a.path - b.path);
     this.totalTime = Math.max(0, ...sim.paths.map(p => p.totalTime || 0));
+    this.collider = opts?.bodies === false ? null : new Collider(project, this);
     this.reset();
   }
   reset() {
@@ -220,6 +223,7 @@ export class StockSim {
     this.state = { mainOpen: false, frontWorld: null, barOffset: 0, z1: -1, subClosed: false, separated: false, attached: 'main', mainC: 0, subC: 0 };
     this.collisions = [];
     this.events = [];
+    if (this.collider) this.collider.found.clear();
   }
   /** t zamanına kadar ilerle (geri gidilirse baştan). Başlamış ama bitmemiş hareketler ayrı tutulur. */
   seek(t) {
@@ -271,7 +275,7 @@ export class StockSim {
     if (m.path === 1 && m.mTo) st.z1 = m.mTo.Z;
     if (m.kind === 'wait' || m.kind === 'dwell') return;
     const tool = m.state.tool;
-    if (!tool) return;
+    if (!tool) { this.checkBodies(m, fa, fb); return; } // takımsız hareket (karşı iş mili transferi) de kontrol edilir
     // gang takımlarında ızgaradan (0.05) ince adım: V/burun profili ayrıklaştırma hatası < 0.01 mm
     const stepLen = (m.path === 1 && tool.unit === 'gang') || (m.path === 2 && tool.type === 'turn') ? (tool.type === 'thread' ? 0.005 : 0.0125) : tool.unit === 'cross' ? 0.06 : 0.04;
     let steps = Math.max(1, Math.ceil(moveLen(m) * (fb - fa) / stepLen));
@@ -297,6 +301,23 @@ export class StockSim {
       }
     }
     if (tool.type === 'cutoff') this.checkSeparation();
+    this.checkBodies(m, fa, fb);
+  }
+
+  /** Makine gövdesi çarpışması: hareket boyunca ~1 mm aralıklarla iki kanalın eşzamanlı konumu */
+  checkBodies(m, fa, fb) {
+    if (!this.collider || !(fb > fa) || m.t1 <= m.t0) return;
+    const n = Math.max(1, Math.ceil(moveLen(m) * (fb - fa) / 1.0));
+    const other = m.path === 1 ? 2 : 1;
+    for (let k = 1; k <= n; k++) {
+      const f = fa + (fb - fa) * k / n;
+      const t = m.t0 + (m.t1 - m.t0) * f;
+      const mo = this.currentMove(other, t);
+      const pm = poseOf(m, t, m.path, this.project.machine), po = poseOf(mo, t, other, this.project.machine);
+      const [p1, p2] = m.path === 1 ? [pm, po] : [po, pm];
+      const [s1, s2] = m.path === 1 ? [m.state, mo?.state] : [mo?.state, m.state];
+      for (const c of this.collider.check(t, p1, p2, s1, s2, m.path, m.line)) this.collisions.push(c);
+    }
   }
 
   /** Gang tornalama takımı: hareket boyunca alt sınırı biriktir, tek seferde uygula */

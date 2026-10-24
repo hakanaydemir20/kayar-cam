@@ -2,6 +2,8 @@
 import { dilate, noseTipPath, toPolyline, sampleProfile, turnableEnvelope } from '../geom/sampled.js';
 import { fitSegments } from '../geom/fit.js';
 import { rpmFromVc, threadDepth, round3 } from '../tools/cuttingData.js';
+import { rotaryProfile } from '../tools/toolGeom.js';
+import { SUB_NUT } from '../sim/bodies.js';
 
 const r3 = round3;
 
@@ -123,7 +125,8 @@ GEN.face = (prog, ctx, op, tool) => {
   const xStart = ctx.stock.barDia + 1;
   for (let k = 1; k <= n; k++) {
     const z = r3(-fs + (fs * k) / n);
-    prog.rapid({ X: xStart, Y: 0, Z: r3(z - 0.0) });
+    if (k === 1) goto(prog, ctx, xStart, z);   // önce güvenli X (önceki takım ön kovan olabilir), sonra Y/Z
+    else prog.rapid({ Z: z });
     prog.line({ X: r3(-2 * rn - 0.1) }, F);
     prog.rapid({ Z: r3(z - 0.5) });
     prog.rapid({ X: xStart });
@@ -257,9 +260,11 @@ GEN.groove = (prog, ctx, op, tool) => {
   const span = z1 - w;
   const n = Math.max(1, Math.ceil((span - z0) / (0.8 * w) - 1e-9));
   for (let k = 0; k <= n; k++) zs.push(r3(z0 + ((span - z0) * k) / n));
+  let first = true;
   for (const Z of [...new Set(zs)]) {
     const h = hAt(Z) + p.allow;
-    prog.rapid({ X: xApp, Y: 0, Z });
+    if (first) goto(prog, ctx, xApp, Z); else prog.rapid({ Z });
+    first = false;
     prog.line({ X: r3(2 * h) }, F);
     prog.rapid({ X: xApp });
   }
@@ -268,7 +273,7 @@ GEN.groove = (prog, ctx, op, tool) => {
   for (let Z = z0; Z <= span + 1e-9; Z += 0.01) pts.push({ z: Z, r: hAt(Z) });
   if (pts[pts.length - 1].z < span - 1e-6) pts.push({ z: span, r: hAt(span) });
   const segs = fitSegments(pts, 0.002, { arcs: false });
-  prog.rapid({ X: xApp, Z: r3(z0) });
+  prog.rapid({ Z: r3(z0) });
   prog.line({ X: r3(2 * pts[0].r) }, F);
   emitSegments(prog, segs, F, ctx);
   prog.rapid({ X: xApp });
@@ -295,7 +300,7 @@ GEN.thread = (prog, ctx, op, tool) => {
   prog.coolant(true);
   const zStart = r3(f.z0 - Math.max(2 * f.pitch, 1.5));
   const xStart = r3(f.dia + 2);
-  prog.rapid({ X: xStart, Y: 0, Z: zStart });
+  goto(prog, ctx, xStart, zStart);
   for (const d of threadPasses(h, p.firstDepth, p.springPasses)) {
     prog.thread92({ X: r3(f.dia - 2 * d), Z: r3(f.z1) }, f.pitch);
   }
@@ -321,6 +326,7 @@ function axialDrillCycle(prog, ctx, Zend, peck, F) {
 function drillOnSpindle(prog, ctx, op, tool, which) {
   const f = featureOf(ctx, op, 'axialHole');
   const p = op.params;
+  if (which === 'sub' && f.depth + tipLen(tool) > backMaxDepth(ctx)) throw new Error(`${op.name}: delik derinliği arka işleme sınırını (${r3(backMaxDepth(ctx))} mm) aşıyor — pens somunu arka takımlara çarpar`);
   if (tool.type !== 'center' && tool.dia > f.dia + 1e-6) throw new Error(`${op.name}: matkap Ø${tool.dia} > delik Ø${f.dia}`);
   const limDrill = which === 'main' ? ctx.machine.stations.frontSleeve.maxDrill : ctx.machine.liveTools.back.maxDrillStatic;
   if (tool.dia > limDrill) throw new Error(`${op.name}: Ø${tool.dia} matkap makine kapasitesini (Ø${limDrill}) aşıyor`);
@@ -478,7 +484,7 @@ GEN.cutoff = (prog, ctx, op, tool, extra) => {
   prog.spindle({ which: 'main', dir: 'cw', rpm });
   prog.coolant(true);
   const Z = r3(ctx.L + (ctx.backStock || 0)); // arka alın payı: arka tornalamada alınır
-  prog.rapid({ X: r3(ctx.stock.barDia + 1), Y: 0, Z });
+  goto(prog, ctx, r3(ctx.stock.barDia + 1), Z);
   const F = p.feed || tool.feed;
   if (extra && extra.pick) {
     prog.wait(extra.w1);  // karşı iş mili yaklaşabilir
@@ -512,16 +518,19 @@ GEN.pickoff = (prog, ctx, op, tool, extra) => {
   const p = op.params;
   const grip = Math.min(p.grip, ctx.L - 1);
   if (grip < 2) throw new Error(`${op.name}: parça boyu karşı iş milinde tutmak için çok kısa`);
-  const park = r3(ctx.L + 40);
+  const park = subPark(ctx);
   prog.workOffset('G54');
-  prog.rapid({ X: 0, Z: park });
+  prog.rapid({ X: 0 });
+  prog.rapid({ Z: park });
   prog.m('subChuckOpen');
   prog.wait(extra.w1);
   prog.feedMode('min');
   prog.spindle({ which: 'sub', dir: 'cw', rpm: extra.rpm });
   prog.m('spindleSync');
-  prog.rapid({ Z: r3(ctx.L - grip + 1) });
-  prog.line({ Z: r3(ctx.L - grip) }, p.feed);
+  // parça önü kesme anında L + arka alın payı konumunda: tutma boyu tam 'grip' olsun (G55 çerçevesi buna dayanır)
+  const zGrip = ctx.L + (ctx.backStock || 0) - grip;
+  prog.rapid({ Z: r3(zGrip + 1) });
+  prog.line({ Z: r3(zGrip) }, p.feed);
   prog.m('subChuckClose');
   prog.dwell(0.3);
   prog.wait(extra.w2);
@@ -530,6 +539,16 @@ GEN.pickoff = (prog, ctx, op, tool, extra) => {
   prog.rapid({ Z: park });
   op._grip = grip;
 };
+
+/** Arka işlemlerde en büyük derinlik (G55 Z): pens somunu (alından SUB_NUT çıkıntılı) arka takım uçlarına 1 mm yaklaşabilir */
+export function backMaxDepth(ctx) { return ctx.L - ctx.grip - SUB_NUT - 1; }
+
+/** Karşı iş mili bekleme konumu (G54 Z): parçanın önünde ve ön kovan takımlarının erişiminin dışında */
+export function subPark(ctx) {
+  let reach = 0;
+  for (const t of ctx.tools.filter(t => t.unit === 'front')) reach = Math.max(reach, 58, rotaryProfile(t).length);
+  return r3(Math.max(ctx.L + 40, reach + 25));
+}
 
 function backStart(prog, ctx) {
   prog.workOffset('G55');
@@ -553,7 +572,7 @@ GEN.eject = (prog, ctx) => {
   prog.rapid({ Z: -5 });          // arka takımlardan uzaklaş
   prog.workOffset('G54');
   prog.rapid({ X: 0 });           // önce yanal, sonra eksenel (çapraz hareket yok)
-  prog.rapid({ Z: r3(ctx.L + 40) });
+  prog.rapid({ Z: subPark(ctx) });
   prog.m('subChuckOpen');
   prog.m('partEject');
   prog.dwell(0.5);
@@ -661,7 +680,7 @@ function backTurnStart(prog, ctx, tool, op) {
 GEN.backTurn = (prog, ctx, op, tool) => {
   const p = op.params;
   const L = ctx.L, grip = ctx.grip;
-  const zLim = r3(L - grip - 2);             // pens somunu boşluğu
+  const zLim = r3(backMaxDepth(ctx));       // pens somunu arka takım uç düzlemine 1 mm'den fazla yaklaşmaz
   if (zLim < 0.3) throw new Error(`${op.name}: parça karşı iş milinden yeterince çıkmıyor (tutma ${grip} mm)`);
   const B = ctx.backProfile();
   const back = tool.backAngle ?? Math.max(5, 180 - 93 - (tool.insertAngle || 35));
@@ -727,7 +746,7 @@ GEN.backSlot = (prog, ctx, op, tool) => {
   const f = featureOf(ctx, op, 'faceSlot');
   backLiveCheck(ctx, op, tool);
   if (Math.abs(tool.dia - f.width) > 1e-6) throw new Error(`${op.name}: takım Ø${tool.dia} ≠ kanal genişliği ${f.width} (X2 tek eksen: genişlik = takım çapı)`);
-  if (f.depth > ctx.L - ctx.grip - 1) throw new Error(`${op.name}: kanal derinliği pens bölgesine ulaşıyor`);
+  if (f.depth > backMaxDepth(ctx)) throw new Error(`${op.name}: kanal derinliği (${f.depth}) arka işleme sınırını (${r3(backMaxDepth(ctx))}) aşıyor — pens somunu arka takımlara çarpar`);
   const Rb = ctx.rAt(ctx.L - 0.01);
   const { feed } = backLiveStart(prog, ctx, tool);
   prog.rapid({ C: r3(f.c || 0) });
@@ -765,7 +784,7 @@ GEN.backPolar = (prog, ctx, op, tool) => {
   if (!(f.n >= 3)) throw new Error(`${op.name}: kenar sayısı en az 3 olmalı`);
   const Rb = ctx.rAt(ctx.L - 0.01);
   if (f.af / 2 >= Rb - 0.001) throw new Error(`${op.name}: anahtar ağzı çaptan küçük olmalı`);
-  if (f.depth > ctx.L - ctx.grip - 1) throw new Error(`${op.name}: derinlik pens bölgesine ulaşıyor`);
+  if (f.depth > backMaxDepth(ctx)) throw new Error(`${op.name}: derinlik (${f.depth}) arka işleme sınırını (${r3(backMaxDepth(ctx))}) aşıyor — pens somunu arka takımlara çarpar`);
   const rt = tool.dia / 2, p = op.params;
   const { feed } = backLiveStart(prog, ctx, tool);
   // radyal pasolar: dış stoktan kontura (son paso offset = rt)

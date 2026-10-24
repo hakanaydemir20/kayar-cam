@@ -343,7 +343,8 @@ export class App {
   downloadNC() {
     const r = this.result;
     if (!r?.posted) { this.toast('Önce programı hesaplayın'); return; }
-    const errs = r.errors.length + (this.verify ? this.verify.ss.collisions.length : 0);
+    if (!this.verify) { this.toast('Verify ve çarpışma kontrolü sürüyor — bitince indirin.', 3500); return; }
+    const errs = r.errors.length + this.verify.ss.collisions.length + (this.verify.c.over ? 1 : 0);
     if (errs) { this.toast(`İndirme kilitli: ${errs} hata var. Hatalar sekmesine bakın.`, 4500); document.querySelector('[data-bt="msgs"]').click(); return; }
     const name = `O${String(this.project.post.programNumber).padStart(4, '0')}`;
     download(name + '.nc', r.posted.text.replace(/\n/g, '\r\n'), 'text/plain');
@@ -687,7 +688,7 @@ export class App {
     box.append(h('div', { class: 'vsum' },
       card('Fazla kesim', c.over ? `${c.over} · ${c.overMax.toFixed(3)} mm` : 'YOK', c.over ? 'bad' : 'ok'),
       card('Kalan malzeme', c.under ? `${((c.under / c.cells) * 100).toFixed(2)}% · ${c.underMax.toFixed(3)} mm` : 'YOK', c.under ? 'mid' : 'ok'),
-      card('G0 çarpışma', ss.collisions.length ? String(ss.collisions.length) : 'YOK', ss.collisions.length ? 'bad' : 'ok'),
+      card('Çarpışma (takım, tutucu, makine)', ss.collisions.length ? String(ss.collisions.length) : 'YOK', ss.collisions.length ? 'bad' : 'ok'),
       card('İç delik', c.innerOver ? `${c.innerOver} fazla` : c.innerUnder ? `${c.innerUnder} eksik` : 'TAMAM', c.innerOver ? 'bad' : c.innerUnder ? 'mid' : 'ok'),
       card('Parça transferi', ss.state.separated ? (ss.state.attached === 'dropped' ? 'Düştü' : 'Karşı mile alındı') : 'Kesilmedi', ss.state.separated ? 'ok' : 'bad'),
       card('Çevrim süresi', fmtTime(this.totalTime), 'ok')));

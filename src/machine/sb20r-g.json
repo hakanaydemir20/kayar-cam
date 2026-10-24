@@ -32,7 +32,7 @@
       "desc": "Ana iş mili C ekseni"
     },
     "X2": {
-      "min": -150,
+      "min": -180,
       "max": 20,
       "estimated": true,
       "desc": "Karşı iş mili yanal (mm, makine)"
