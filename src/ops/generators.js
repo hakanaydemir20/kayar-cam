@@ -38,7 +38,7 @@ export const OP_TYPES = {
 export function defaultParams(type) {
   switch (type) {
     case 'face': return { ap: 0.15, feed: null, vc: null };
-    case 'rough': return { ap: 1.0, allowX: 0.15, allowZ: 0.05, retract: 0.3, feed: null, vc: null, contourPass: true };
+    case 'rough': return { strategy: 'z', ap: 1.0, allowX: 0.15, allowZ: 0.05, retract: 0.3, feed: null, vc: null, contourPass: true };
     case 'finish': return { feed: null, vc: null, tol: 0.002 };
     case 'groove': return { z0: null, z1: null, allow: 0.05, peck: 0, feed: null, vc: null };
     case 'thread': return { featureId: null, firstDepth: 0.15, springPasses: 1, rpm: null };
@@ -170,7 +170,11 @@ GEN.rough = (prog, ctx, op, tool, extra) => {
   startTurning(prog, ctx, tool, op);
   if (extra?.seg) prog.comment(`SEGMENT ${extra.seg} Z${r3(Math.max(0, z0))}-${r3(z1)}`);
   const F = p.feed || tool.feed;
-  if (!roughLevels(prog, ctx, P, R0, z0, z1, p, F)) { prog.comment('KABA: KALDIRILACAK MALZEME YOK'); endTool(prog, ctx); return; }
+  const strat = p.strategy || 'z';
+  const done = strat === 'profile' ? roughProfile(prog, ctx, P, R0, z0, z1, p, F)
+    : strat === 'face' ? roughFace(prog, ctx, P, R0, z0, z1, p, F)
+      : roughLevels(prog, ctx, P, R0, z0, z1, p, F);
+  if (!done) { prog.comment('KABA: KALDIRILACAK MALZEME YOK'); endTool(prog, ctx); return; }
   if (p.contourPass) {
     // yarı finiş kontur pasosu: pay bırakılmış profil boyunca
     const zs = contourEntry(prog, ctx, P, z0, inner, R0, F);
@@ -180,6 +184,59 @@ GEN.rough = (prog, ctx, op, tool, extra) => {
   }
   endTool(prog, ctx);
 };
+
+/** Profile paralel (kontur ofset) kaba: her paso son kontura sabit uzaklıkta (sabit talaş kalınlığı).
+ *  Çubuk dışında kalan kısımlar (ofset ≥ R0) hava: atlanır. Pasolar dıştan içe. */
+export function roughProfile(prog, ctx, P, R0, zFrom, zTo, p, F) {
+  const i0 = P.idx(Math.max(zFrom, 0)), i1 = P.idx(zTo);
+  let maxGap = 0;
+  for (let i = i0; i <= i1; i++) maxGap = Math.max(maxGap, R0 - P.r[i]);
+  if (maxGap <= 1e-6) return false;
+  const n = Math.ceil(maxGap / p.ap - 1e-9);
+  const xUp = r3(2 * (R0 + 0.5));
+  for (let k = n; k >= 1; k--) {
+    const o = (k - 1) * p.ap;   // son paso (k = 1) pay bırakılmış konturun kendisi
+    // ofset yolu: P + o (o = 0 son paso = pay bırakılmış kontur), çubuk yüzeyinin altı malzeme
+    let i = i0;
+    while (i <= i1) {
+      while (i <= i1 && P.r[i] + o >= R0 - 1e-6) i++;
+      if (i > i1) break;
+      const a = i;
+      while (i <= i1 && P.r[i] + o < R0 - 1e-6) i++;
+      const b = i - 1;
+      if (P.zAt(b) - P.zAt(a) < 0.05) continue;
+      const pts = [];
+      for (let q = a; q <= b; q++) pts.push({ z: P.zAt(q), r: Math.min(R0, P.r[q] + o) });
+      goto(prog, ctx, xUp, r3(pts[0].z));
+      prog.line({ X: r3(2 * pts[0].r) }, F);
+      emitSegments(prog, fitSegments(pts, 0.003, { arcs: false }), F, ctx);
+      prog.line({ X: r3(2 * pts[pts.length - 1].r + 2 * p.retract), Z: r3(pts[pts.length - 1].z - p.retract) }, F);
+      prog.rapid({ X: xUp });
+    }
+  }
+  return true;
+}
+
+/** Alın (X'e paralel) kaba: Z adımlarıyla radyal pasolar, büyük basamaklar için. Her Z diliminde dıştan profile. */
+export function roughFace(prog, ctx, P, R0, zFrom, zTo, p, F) {
+  const zs = Math.max(zFrom, 0), xUp = r3(2 * (R0 + 0.5));
+  let any = false;
+  // dilim Z: önden arkaya ap adımı; dilimin altındaki en yüksek profil (uç takım bu dilimi kazır)
+  for (let z = zs + p.ap; z <= zTo + p.ap - 1e-9; z += p.ap) {
+    const ze = Math.min(z, zTo);
+    let hi = 0;
+    for (let i = P.idx(Math.max(zs, ze - p.ap)), e = P.idx(ze); i <= e; i++) hi = Math.max(hi, P.r[i]);
+    // dilimin arkasındaki (daha derin) profil daha yüksekse oraya kadar inilemez: P(ze) ile sınırla
+    const target = Math.max(hi, P.at(ze));
+    if (target >= R0 - 1e-6) continue;
+    any = true;
+    goto(prog, ctx, xUp, r3(ze));
+    prog.line({ X: r3(2 * target) }, F);
+    prog.line({ X: r3(2 * target + 2 * p.retract), Z: r3(ze - p.retract) }, F);
+    prog.rapid({ X: xUp });
+  }
+  return any;
+}
 
 /** Z'ye paralel kaba pasolar: R0 yarıçaplı stoktan P (uç yolu) profiline kadar. Ön ve arka (G55) tornalamada ortak. */
 export function roughLevels(prog, ctx, P, R0, zFrom, zTo, p, F) {

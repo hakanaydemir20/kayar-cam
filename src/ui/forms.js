@@ -19,7 +19,7 @@ export const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
 
 export const OP_PARAMS = {
   face: [['ap', 'Paso derinliği (Z)', 'mm'], ['feed', 'İlerleme (boş = takım)', 'mm/dev'], ['vc', 'Kesme hızı (boş = takım)', 'm/dak']],
-  rough: [['ap', 'Paso derinliği (radyal)', 'mm'], ['allowX', 'Finiş payı X (çapta)', 'mm'], ['allowZ', 'Finiş payı Z', 'mm'], ['retract', 'Geri çekme', 'mm'], ['feed', 'İlerleme (boş = takım)', 'mm/dev'], ['vc', 'Kesme hızı (boş = takım)', 'm/dak'], ['contourPass', 'Yarı finiş kontur pasosu', 'bool']],
+  rough: [['strategy', 'Strateji', 'select:roughStrategy'], ['ap', 'Paso derinliği (radyal / alında eksenel)', 'mm'], ['allowX', 'Finiş payı X (çapta)', 'mm'], ['allowZ', 'Finiş payı Z', 'mm'], ['retract', 'Geri çekme', 'mm'], ['feed', 'İlerleme (boş = takım)', 'mm/dev'], ['vc', 'Kesme hızı (boş = takım)', 'm/dak'], ['contourPass', 'Yarı finiş kontur pasosu', 'bool']],
   finish: [['feed', 'İlerleme (boş = takım)', 'mm/dev'], ['vc', 'Kesme hızı (boş = takım)', 'm/dak'], ['tol', 'Kontur toleransı', 'mm']],
   groove: [['z0', 'Kanal başlangıç Z', 'mm'], ['z1', 'Kanal bitiş Z', 'mm'], ['allow', 'Kaba dalış payı', 'mm'], ['feed', 'İlerleme (boş = takım)', 'mm/dev'], ['vc', 'Kesme hızı (boş = takım)', 'm/dak']],
   thread: [['featureId', 'Diş özelliği', 'feat:thread'], ['firstDepth', 'İlk paso derinliği (radyal)', 'mm'], ['springPasses', 'Boş (yay) paso', 'adet'], ['rpm', 'Devir (boş = Vc’den)', 'dev/dak']],
@@ -101,7 +101,8 @@ export function field(obj, key, label, unit, kind, onChange, opts = {}) {
     const items = opts.items || (which === 'type' ? Object.entries(TOOL_TYPES).map(([k, d]) => [k, d.label])
       : which === 'unit' ? Object.entries(UNITS).map(([k, d]) => [k, d.label])
         : which === 'side' ? [['front', 'Ön'], ['back', 'Arka']]
-          : which === 'sideBack' ? [['back', 'Arka (karşı iş mili, tahrikli)']] : []);
+          : which === 'sideBack' ? [['back', 'Arka (karşı iş mili, tahrikli)']]
+            : which === 'roughStrategy' ? [['z', 'Z’ye paralel (boyuna)'], ['profile', 'Profile paralel (kontur ofset)'], ['face', 'Alın (X’e paralel)']] : []);
     inp = h('select', {}, items.map(([k, l]) => h('option', { value: k }, l)));
     inp.value = v ?? '';
     const numeric = items.length && typeof items[items.length - 1][0] === 'number';

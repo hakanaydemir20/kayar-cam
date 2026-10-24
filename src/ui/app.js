@@ -470,7 +470,8 @@ export class App {
           const [, ft, side] = unit.split(':');
           const items = [['', '— seçin —'], ...P.part.features.filter(f => f.type === ft && (!side || f.side === side)).map(f => [f.id, featureText(f)])];
           g.append(field(op.params, k, label, '', 'select:x', change, { items, full: true }));
-        } else g.append(field(op.params, k, label, unit === 'bool' ? '' : unit, unit === 'bool' ? 'bool' : unit === 'adet' ? 'int' : 'num', change));
+        } else if (unit && unit.startsWith('select:')) g.append(field(op.params, k, label, '', unit, change, { full: true }));
+        else g.append(field(op.params, k, label, unit === 'bool' ? '' : unit, unit === 'bool' ? 'bool' : unit === 'adet' ? 'int' : 'num', change));
       }
       body.append(g);
       const errs = (this.result?.errors || []).filter(e => e.op === op.id);
