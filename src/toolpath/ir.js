@@ -27,5 +27,9 @@ export class Prog {
   wait(n) { return this.push({ k: 'wait', n }); }
   dwell(sec) { return this.push({ k: 'dwell', sec }); }
   raw(text) { return this.push({ k: 'raw', text }); }
+  /** silindirik interpolasyon: r > 0 aç (silindir yarıçapı), 0 kapat */
+  cyl(r) { return this.push({ k: 'cyl', r }); }
+  /** polar interpolasyon aç/kapa (X çap, C hipotetik mm) */
+  polar(on) { return this.push({ k: 'polar', on }); }
   blank() { return this.push({ k: 'blank' }); }
 }

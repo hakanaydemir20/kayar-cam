@@ -1,5 +1,5 @@
 // İşlem üreteçleri: her işlem kanal programına (Prog) IR ekler.
-import { dilate, noseTipPath, toPolyline, sampleProfile } from '../geom/sampled.js';
+import { dilate, noseTipPath, toPolyline, sampleProfile, turnableEnvelope } from '../geom/sampled.js';
 import { fitSegments } from '../geom/fit.js';
 import { rpmFromVc, threadDepth, round3 } from '../tools/cuttingData.js';
 
@@ -23,6 +23,11 @@ export const OP_TYPES = {
   backTap:    { label: 'Arka Kılavuz', channel: 2, tools: ['tap'] },
   eject:      { label: 'Parça Atma', channel: 2, tools: [] },
   rechuck:    { label: 'Çubuk İlerletme', channel: 1, tools: [] },
+  polygonMill:{ label: 'Çokgen Frezeleme (C/Y)', channel: 1, tools: ['endmill'] },
+  cylSlot:    { label: 'Silindirik Kanal (G7.1)', channel: 1, tools: ['endmill'] },
+  backTurn:   { label: 'Arka Tornalama', channel: 2, tools: ['turn'] },
+  backSlot:   { label: 'Arka Alın Kanalı (C2)', channel: 2, tools: ['endmill'] },
+  backPolar:  { label: 'Arka Alın Konturu (G12.1)', channel: 2, tools: ['endmill'] },
 };
 
 export function defaultParams(type) {
@@ -39,11 +44,16 @@ export function defaultParams(type) {
     case 'flatMill': return { featureId: null, ap: 1.0, stepover: 0.6 };
     case 'pocketMill': return { featureId: null, stepDown: 0.5, stepOver: 0.5 };
     case 'pickoff': return { grip: 6, feed: 500 };
-    case 'cutoff': return { feed: null, rpm: null, endX: -0.4 };
+    case 'cutoff': return { feed: null, rpm: null, endX: -0.4, backStock: 0 };
     case 'backDrill': return { featureId: null, peck: null, feed: null };
     case 'backTap': return { featureId: null };
     case 'eject': return {};
     case 'rechuck': return {};
+    case 'polygonMill': return { featureId: null, ap: 1.0, stepover: 0.6 };
+    case 'cylSlot': return { featureId: null, stepDown: 0.5 };
+    case 'backTurn': return { face: true, ap: 0.5, allowX: 0.1, allowZ: 0.05, feed: null, vc: null, roughFeed: null };
+    case 'backSlot': return { featureId: null, stepDown: 0.5 };
+    case 'backPolar': return { featureId: null, stepDown: 0.5, stepOver: 0.6 };
     default: return {};
   }
 }
@@ -129,10 +139,25 @@ GEN.rough = (prog, ctx, op, tool) => {
   const R0 = ctx.barR;
   startTurning(prog, ctx, tool, op);
   const F = p.feed || tool.feed;
-  const iStart = P.idx(-0.5), iEnd = P.idx(ctx.zEnd);
+  const iEnd = P.idx(ctx.zEnd);
+  if (!roughLevels(prog, ctx, P, R0, -0.5, ctx.zEnd, p, F)) { prog.comment('KABA: KALDIRILACAK MALZEME YOK'); return; }
+  if (p.contourPass) {
+    // yarı finiş kontur pasosu: pay bırakılmış profil boyunca
+    const pts = toPolyline(P, P.idx(-0.3), iEnd).map(q => ({ z: q.z, r: Math.min(q.r, R0 + 0.0) }));
+    const segs = fitSegments(pts, 0.003);
+    goto(prog, ctx, r3(2 * Math.max(0, pts[0].r)), r3(pts[0].z));
+    emitSegments(prog, segs, F, ctx);
+    prog.rapid({ X: ctx.safeX });
+  }
+  endTool(prog, ctx);
+};
+
+/** Z'ye paralel kaba pasolar: R0 yarıçaplı stoktan P (uç yolu) profiline kadar. Ön ve arka (G55) tornalamada ortak. */
+export function roughLevels(prog, ctx, P, R0, zFrom, zTo, p, F) {
+  const iStart = P.idx(zFrom), iEnd = P.idx(zTo);
   let minP = Infinity;
   for (let i = iStart; i <= iEnd; i++) minP = Math.min(minP, P.r[i]);
-  if (minP >= R0 - 1e-6) { prog.comment('KABA: KALDIRILACAK MALZEME YOK'); return; }
+  if (minP >= R0 - 1e-6) return false;
   const lvls = [];
   for (let k = 1; R0 - k * p.ap > minP + 1e-6; k++) lvls.push(r3(R0 - k * p.ap));
   lvls.push(r3(minP + 1e-4));
@@ -162,16 +187,8 @@ GEN.rough = (prog, ctx, op, tool) => {
     }
     prevLevel = lv;
   }
-  if (p.contourPass) {
-    // yarı finiş kontur pasosu: pay bırakılmış profil boyunca
-    const pts = toPolyline(P, P.idx(-0.3), iEnd).map(q => ({ z: q.z, r: Math.min(q.r, R0 + 0.0) }));
-    const segs = fitSegments(pts, 0.003);
-    goto(prog, ctx, r3(2 * Math.max(0, pts[0].r)), r3(pts[0].z));
-    emitSegments(prog, segs, F, ctx);
-    prog.rapid({ X: ctx.safeX });
-  }
-  endTool(prog, ctx);
-};
+  return true;
+}
 
 GEN.finish = (prog, ctx, op, tool) => {
   const p = op.params;
@@ -405,34 +422,10 @@ GEN.crossDrill = (prog, ctx, op, tool) => {
 
 GEN.flatMill = (prog, ctx, op, tool) => {
   const f = featureOf(ctx, op, 'flat');
-  const p = op.params;
-  const rt = tool.dia / 2;
-  let Rloc = 0;
-  for (let z = f.z0; z <= f.z1; z += 0.05) Rloc = Math.max(Rloc, ctx.rAt(z));
-  const h = Rloc - f.depth;
-  if (h < 0) throw new Error(`${op.name}: düzlük derinliği yarıçaptan büyük`);
-  const b = Math.sqrt(Math.max(0, Rloc * Rloc - h * h));
   const { feed } = liveData(ctx, tool);
-  const za = r3(f.z0 + rt), zb = r3(Math.max(f.z0 + rt, f.z1 - rt));
-  const ys = [];
-  const yMax = b + 0.3; // takım merkezi düzlük kenarına kadar
-  const n = Math.max(1, Math.ceil((2 * yMax) / (p.stepover * tool.dia)));
-  for (let k = 0; k <= n; k++) ys.push(r3(-yMax + (2 * yMax * k) / n));
-  const levels = [];
-  for (let lv = Rloc - p.ap; lv > h + 1e-6; lv -= p.ap) levels.push(lv);
-  levels.push(h);
   startLive(prog, ctx, tool, f.c);
-  for (const lv of levels) {
-    const x = r3(2 * lv);
-    goto(prog, ctx, r3(2 * (Rloc + 1)), za, ys[0]);
-    prog.line({ X: x }, feed);
-    ys.forEach((y, k) => {
-      if (k > 0) prog.line({ Y: y }, feed);
-      prog.line({ Z: k % 2 === 0 ? zb : za }, feed);
-    });
-    prog.rapid({ X: r3(2 * (Rloc + 1)) });
-  }
-  prog.rapid({ Y: 0 });
+  try { flatPasses(prog, ctx, tool, f.c, f.depth, f.z0, f.z1, op.params, feed); }
+  catch (e) { throw new Error(`${op.name}: ${e.message}`); }
   endLive(prog, ctx);
 };
 
@@ -477,20 +470,21 @@ GEN.pocketMill = (prog, ctx, op, tool) => {
 
 GEN.cutoff = (prog, ctx, op, tool, extra) => {
   const p = op.params;
+  if ((ctx.backStock || 0) > 0.5 * tool.width + 1e-9) throw new Error(`${op.name}: arka alın payı (${ctx.backStock}) kesme genişliğinin yarısını (${0.5 * tool.width}) aşamaz`);
   const rpm = lim(ctx, p.rpm || rpmFromVc(tool.vc, ctx.stock.barDia), 'main');
   prog.rapid({ X: ctx.safeX });
   prog.tool(tool);
   prog.feedMode('rev');
   prog.spindle({ which: 'main', dir: 'cw', rpm });
   prog.coolant(true);
-  const Z = r3(ctx.L);
+  const Z = r3(ctx.L + (ctx.backStock || 0)); // arka alın payı: arka tornalamada alınır
   prog.rapid({ X: r3(ctx.stock.barDia + 1), Y: 0, Z });
   const F = p.feed || tool.feed;
   if (extra && extra.pick) {
     prog.wait(extra.w1);  // karşı iş mili yaklaşabilir
     prog.wait(extra.w2);  // karşı iş mili parçayı tuttu
   }
-  prog.line({ X: r3(2 * ctx.rAt(ctx.L - 0.01) + 0.4) }, F * 2);
+  prog.line({ X: r3(2 * Math.max(ctx.rAt(ctx.L - 0.01), ctx.rAt(Z)) + 0.4) }, F * 2);
   prog.line({ X: r3(p.endX) }, F);
   if (extra && extra.pick) prog.wait(extra.w3);
   op._cutRpm = rpm;
@@ -563,6 +557,248 @@ GEN.eject = (prog, ctx) => {
   prog.m('subChuckOpen');
   prog.m('partEject');
   prog.dwell(0.5);
+};
+
+// ================================================================ C/Y frezeleme (ana iş mili, çapraz tahrikli)
+/** Tek düzlük: C açısında, Rloc dış çaptan h yüksekliğine kadar Y zikzak (startLive sonrası çağrılır) */
+function flatPasses(prog, ctx, tool, c, depth, z0, z1, p, feed) {
+  const rt = tool.dia / 2;
+  let Rloc = 0;
+  for (let z = z0; z <= z1 + 1e-9; z += 0.05) Rloc = Math.max(Rloc, ctx.rAt(z));
+  const h = Rloc - depth;
+  if (h < 0) throw new Error('düzlük derinliği yarıçaptan büyük');
+  if (z1 - z0 < tool.dia - 1e-6) throw new Error(`düzlük boyu (${r3(z1 - z0)}) takım çapından (${tool.dia}) küçük`);
+  const b = Math.sqrt(Math.max(0, Rloc * Rloc - h * h));
+  const za = r3(z0 + rt), zb = r3(Math.max(z0 + rt, z1 - rt));
+  const yMax = b + 0.3;
+  const n = Math.max(1, Math.ceil((2 * yMax) / (p.stepover * tool.dia)));
+  const ys = [];
+  for (let k = 0; k <= n; k++) ys.push(r3(-yMax + (2 * yMax * k) / n));
+  const levels = [];
+  for (let lv = Rloc - p.ap; lv > h + 1e-6; lv -= p.ap) levels.push(lv);
+  levels.push(h);
+  prog.rapid({ X: ctx.safeX });
+  prog.rapid({ C: r3(c) });
+  const yN = ys[ys.length - 1];
+  for (const lv of levels) {
+    const x = r3(2 * lv);
+    goto(prog, ctx, r3(2 * (Rloc + 1)), za, ys[0]);
+    prog.line({ X: x }, feed);
+    // çevre: iki uçta (za, zb) tam Y süpürmesi → düzlük uçlarında tarak izi kalmaz
+    prog.line({ Y: yN }, feed);
+    prog.line({ Z: zb }, feed);
+    prog.line({ Y: ys[0] }, feed);
+    // iç: Z yönünde zikzak
+    ys.forEach((y, k) => {
+      if (k > 0) prog.line({ Y: y }, feed);
+      prog.line({ Z: k % 2 === 0 ? za : zb }, feed);
+    });
+    prog.rapid({ X: r3(2 * (Rloc + 1)) });
+  }
+  prog.rapid({ Y: 0 });
+}
+
+/** Çokgen (altıgen, kare…): her kenar bir düzlük, C ile indekslenir */
+GEN.polygonMill = (prog, ctx, op, tool) => {
+  const f = featureOf(ctx, op, 'polygon');
+  if (!(f.n >= 3)) throw new Error(`${op.name}: kenar sayısı en az 3 olmalı`);
+  let Rloc = 0;
+  for (let z = f.z0; z <= f.z1 + 1e-9; z += 0.05) Rloc = Math.max(Rloc, ctx.rAt(z));
+  const depth = Rloc - f.af / 2;
+  if (depth <= 0.001) throw new Error(`${op.name}: anahtar ağzı (${f.af}) çaptan (Ø${r3(2 * Rloc)}) küçük olmalı`);
+  const { feed } = liveData(ctx, tool);
+  startLive(prog, ctx, tool, f.c || 0);
+  for (let k = 0; k < f.n; k++) {
+    const c = (f.c || 0) + (360 * k) / f.n;
+    try { flatPasses(prog, ctx, tool, c, depth, f.z0, f.z1, op.params, feed); }
+    catch (e) { throw new Error(`${op.name}: ${e.message}`); }
+  }
+  endLive(prog, ctx);
+};
+
+/** Çapta kanal: silindirik interpolasyon (G7.1). Z ve C (derece) birlikte; ilerleme yüzey boyunca. */
+GEN.cylSlot = (prog, ctx, op, tool) => {
+  const f = featureOf(ctx, op, 'odSlot');
+  if (Math.abs(tool.dia - f.width) > 1e-6) throw new Error(`${op.name}: takım Ø${tool.dia} ≠ kanal genişliği ${f.width}`);
+  let Rloc = 0;
+  // kanal bölgesi (uçlar hariç 0.01: komşu basamağın dikey yüzü sayılmasın)
+  const zl = Math.min(f.z0, f.z1) - tool.dia / 2 + 0.01, zh = Math.max(f.z0, f.z1) + tool.dia / 2 - 0.01;
+  for (let z = zl; z <= zh + 1e-9; z += 0.05) Rloc = Math.max(Rloc, ctx.rAt(z));
+  if (f.depth >= Rloc) throw new Error(`${op.name}: derinlik yarıçaptan büyük`);
+  const { feed } = liveData(ctx, tool);
+  const levels = [];
+  for (let d = op.params.stepDown; d < f.depth - 1e-6; d += op.params.stepDown) levels.push(d);
+  levels.push(f.depth);
+  startLive(prog, ctx, tool, f.c0);
+  const xTop = r3(2 * (Rloc + 1));
+  goto(prog, ctx, xTop, r3(f.z0));
+  let atStart = true;
+  for (const d of levels) {
+    const x = r3(2 * (Rloc - d));
+    prog.line({ X: x }, Math.round(feed * 0.5));               // dalış (kanal ucunda)
+    prog.cyl(r3(Rloc));                                        // G7.1 (silindir yarıçapı)
+    prog.line(atStart ? { Z: r3(f.z1), C: r3(f.c1) } : { Z: r3(f.z0), C: r3(f.c0) }, feed);
+    prog.cyl(0);
+    atStart = !atStart;
+  }
+  prog.rapid({ X: xTop });
+  endLive(prog, ctx);
+};
+
+// ================================================================ arka işlemler ($2, G55: Z = arka alından derinlik)
+function backTurnStart(prog, ctx, tool, op) {
+  prog.workOffset('G55');
+  prog.rapid({ Z: -5 });
+  prog.tool(tool);
+  prog.feedMode('rev');
+  const vc = op.params.vc || tool.vc;
+  prog.spindle({ which: 'sub', dir: 'cw', css: vc, maxRpm: Math.round(Math.min(ctx.machine.subSpindle.maxRpm, ctx.project.stock.maxRpm || Infinity)) });
+  prog.coolant(true, true);
+}
+
+/** Arka tornalama: alın (kesme yüzü / pay) + profil, karşı iş mili pens bölgesine kadar.
+ *  Geometri ön tornalamanın aynısı: profil arka alından aynalanır. Yalnız doğru segmentler (G1). */
+GEN.backTurn = (prog, ctx, op, tool) => {
+  const p = op.params;
+  const L = ctx.L, grip = ctx.grip;
+  const zLim = r3(L - grip - 2);             // pens somunu boşluğu
+  if (zLim < 0.3) throw new Error(`${op.name}: parça karşı iş milinden yeterince çıkmıyor (tutma ${grip} mm)`);
+  const B = ctx.backProfile();
+  const back = tool.backAngle ?? Math.max(5, 180 - 93 - (tool.insertAngle || 35));
+  const env = turnableEnvelope(B, back);
+  const P = noseTipPath(env, tool.noseR);
+  const Pr = noseTipPath(dilate(env, p.allowZ, p.allowX / 2), tool.noseR);
+  const R0 = ctx.barR, rn = tool.noseR, bs = ctx.backStock || 0;
+  const F = p.feed || tool.feed, Fr = p.roughFeed || F;
+  backTurnStart(prog, ctx, tool, op);
+  const xOut = r3(2 * (R0 + 0.5));
+  // alın: arka alın payı (varsa) pasolarla, sonra Z0
+  if (p.face || bs > 0) {
+    const n = Math.max(1, Math.ceil(bs / Math.max(0.05, p.ap) - 1e-9));
+    for (let k = bs > 0 ? 1 : n; k <= n; k++) {
+      const z = r3(-bs + (bs * k) / n);
+      prog.rapid({ X: xOut });
+      prog.rapid({ Z: z });
+      prog.line({ X: r3(-2 * rn - 0.1) }, F);
+      prog.rapid({ Z: r3(z - 0.5) });
+    }
+    prog.rapid({ X: xOut });
+  }
+  // kaba (profil arka açı içinde ulaşılabiliyorsa)
+  roughLevels(prog, ctx, Pr, R0, -0.5, zLim, { ...p, retract: 0.3 }, Fr);
+  // finiş: arka alından pens bölgesine (yalnız doğrular: aynalı çerçevede yay yönü belirsizliği yok)
+  const pts = toPolyline(P, P.idx(-0.5), P.idx(zLim)).map(q => ({ z: q.z, r: Math.min(q.r, R0) }));
+  const segs = fitSegments(pts, 0.002, { arcs: false });
+  goto(prog, ctx, r3(2 * Math.max(0, pts[0].r)), r3(pts[0].z));
+  emitSegments(prog, segs, F, ctx);
+  prog.line({ X: xOut }, F);
+  prog.rapid({ X: ctx.safeX });
+  prog.rapid({ Z: -5 });
+  prog.coolant(false, true);
+};
+
+function backLiveStart(prog, ctx, tool) {
+  prog.workOffset('G55');
+  prog.rapid({ Z: -5 });
+  prog.spindle({ which: 'sub', dir: 'stop' });
+  prog.m('subCAxisOn');
+  prog.tool(tool);
+  prog.feedMode('min');
+  const max = ctx.machine.liveTools.back.maxRpm;
+  const rpm = Math.min(max, Math.round(rpmFromVc(tool.vc, tool.dia)));
+  prog.spindle({ which: 'backLive', dir: 'cw', rpm });
+  prog.coolant(true, true);
+  return { rpm, feed: Math.round(Math.max(5, tool.fz * (tool.flutes || 2) * rpm)) };
+}
+function backLiveEnd(prog, ctx) {
+  prog.rapid({ Z: -5 });
+  prog.spindle({ which: 'backLive', dir: 'stop' });
+  prog.coolant(false, true);
+  prog.rapid({ C: 0 });
+  prog.m('subCAxisOff');
+}
+function backLiveCheck(ctx, op, tool) {
+  if (!tool.live || tool.unit !== 'back') throw new Error(`${op.name}: arka ünitede tahrikli takım gerekli`);
+  if (tool.dia > ctx.machine.liveTools.back.maxDrillLive + 1e-6) throw new Error(`${op.name}: Ø${tool.dia} arka tahrikli kapasiteyi aşıyor`);
+}
+
+/** Arka alında merkezden geçen kanal (tornavida kanalı): C2 indeks + X2 boyunca */
+GEN.backSlot = (prog, ctx, op, tool) => {
+  const f = featureOf(ctx, op, 'faceSlot');
+  backLiveCheck(ctx, op, tool);
+  if (Math.abs(tool.dia - f.width) > 1e-6) throw new Error(`${op.name}: takım Ø${tool.dia} ≠ kanal genişliği ${f.width} (X2 tek eksen: genişlik = takım çapı)`);
+  if (f.depth > ctx.L - ctx.grip - 1) throw new Error(`${op.name}: kanal derinliği pens bölgesine ulaşıyor`);
+  const Rb = ctx.rAt(ctx.L - 0.01);
+  const { feed } = backLiveStart(prog, ctx, tool);
+  prog.rapid({ C: r3(f.c || 0) });
+  const xa = r3(2 * (Rb + tool.dia / 2 + 1)), xb = -xa;
+  prog.rapid({ X: xa });
+  prog.rapid({ Z: -1 });
+  let side = 0;
+  for (let d = Math.min(op.params.stepDown, f.depth); ; d = Math.min(f.depth, d + op.params.stepDown)) {
+    prog.line({ Z: r3(d) }, feed);
+    prog.line({ X: side ? xa : xb }, feed);
+    side ^= 1;
+    if (d >= f.depth - 1e-9) break;
+  }
+  prog.rapid({ Z: -1 });
+  prog.rapid({ X: 0 });
+  backLiveEnd(prog, ctx);
+};
+
+/** Çokgen kontur (dış offset, keskin köşe = köşede oyma yok). (x, y) hipotetik düzlem noktaları. */
+export function polygonLoop(n, af, rotDeg, off) {
+  const a = af / 2 + off;
+  const R = a / Math.cos(Math.PI / n);
+  const pts = [];
+  for (let k = 0; k < n; k++) {
+    const th = (rotDeg * Math.PI) / 180 + (2 * k + 1) * Math.PI / n; // köşeler kenar normalleri arasında
+    pts.push({ x: R * Math.cos(th), y: R * Math.sin(th) });
+  }
+  return pts;
+}
+
+/** Arka alın konturu (altıgen vb.): polar interpolasyon G12.1 (X çap, C hipotetik mm) */
+GEN.backPolar = (prog, ctx, op, tool) => {
+  const f = featureOf(ctx, op, 'facePolygon');
+  backLiveCheck(ctx, op, tool);
+  if (!(f.n >= 3)) throw new Error(`${op.name}: kenar sayısı en az 3 olmalı`);
+  const Rb = ctx.rAt(ctx.L - 0.01);
+  if (f.af / 2 >= Rb - 0.001) throw new Error(`${op.name}: anahtar ağzı çaptan küçük olmalı`);
+  if (f.depth > ctx.L - ctx.grip - 1) throw new Error(`${op.name}: derinlik pens bölgesine ulaşıyor`);
+  const rt = tool.dia / 2, p = op.params;
+  const { feed } = backLiveStart(prog, ctx, tool);
+  // radyal pasolar: dış stoktan kontura (son paso offset = rt)
+  const offs = [];
+  const outer = Rb - f.af / 2;
+  for (let o = rt + outer; o > rt + 1e-6; o -= p.stepOver * tool.dia) offs.push(o);
+  offs.push(rt);
+  const levels = [];
+  for (let d = p.stepDown; d < f.depth - 1e-6; d += p.stepDown) levels.push(d);
+  levels.push(f.depth);
+  const xs = r3(2 * (Rb + rt + 1));                // giriş/çıkış: +x ekseni üstünde stok dışı
+  prog.rapid({ C: 0 });
+  prog.rapid({ X: xs });
+  prog.rapid({ Z: -1 });
+  const ang = (q) => { let t = Math.atan2(q.y, q.x); if (t < 0) t += 2 * Math.PI; return t; };
+  for (const d of levels) {
+    prog.polar(true);
+    prog.line({ Z: r3(d) }, feed);
+    for (const o of offs) {
+      const loop = polygonLoop(f.n, f.af, f.c || 0, o).sort((u, v) => ang(u) - ang(v));
+      // +x eksenini kesen kenar (son köşe → ilk köşe) üzerinden giriş/çıkış
+      const last = loop[loop.length - 1], first = loop[0];
+      const tt = last.y / (last.y - first.y);
+      const xe = last.x + (first.x - last.x) * tt;
+      prog.line({ X: r3(2 * xe), C: 0 }, feed);
+      for (const q of loop) prog.line({ X: r3(2 * q.x), C: r3(q.y) }, feed);  // CCW
+      prog.line({ X: r3(2 * xe), C: 0 }, feed);
+    }
+    prog.line({ X: xs, C: 0 }, feed);
+    prog.rapid({ Z: -1 });
+    prog.polar(false);
+  }
+  backLiveEnd(prog, ctx);
 };
 
 export { GEN };

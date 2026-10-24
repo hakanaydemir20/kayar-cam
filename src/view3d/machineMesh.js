@@ -374,7 +374,7 @@ export class MachineModel {
     if (this.partMesh) { this.partMesh.mesh.removeFromParent(); this.partMesh.dispose(); }
     if (this.barMesh) { this.barMesh.mesh.removeFromParent(); this.barMesh.dispose(); }
     const S = stockSim.stock;
-    const iL = S.idx(stockSim.L + stockSim.cutW * 0.5);
+    const iL = S.idx(stockSim.L + (stockSim.bs || 0) + stockSim.cutW * 0.5);
     this.stockSim = stockSim;
     this.partMesh = new StockMesh(S, 0, iL);
     this.barMesh = new StockMesh(S, iL, S.nz - 1);
@@ -418,7 +418,8 @@ export class MachineModel {
     const s2 = m2 ? m2.state : null;
     const subFace = pose2.m.Z, subLat = pose2.m.X;
     this.sub.position.set(subFace, 0, subLat);
-    if (s2 && s2.sub.dir !== 'stop') this.subNose.rotation.x += spinStep(m2, dt, s2.sub.dir, 'sub');
+    if (s2 && s2.subCAxis) this.subNose.rotation.x = (pose2.p.C || 0) * DEG;            // C2 konumlama
+    else if (s2 && s2.sub.dir !== 'stop') this.subNose.rotation.x += spinStep(m2, dt, s2.sub.dir, 'sub');
     // parça karşı iş milinde mi?
     const grip = stockSim.sim.frames ? stockSim.L - stockSim.sim.frames.projection : 5;
     if (st.attached === 'sub' || st.attached === 'ejected') {

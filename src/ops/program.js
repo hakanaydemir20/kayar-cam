@@ -31,6 +31,8 @@ export function buildProgram(project) {
     cut.params._syncRpm = cutRpm;
   }
   const W = { w1: 1, w2: 2, w3: 3 };
+  if (pick) ctx.grip = Math.min(pick.params.grip, ctx.L - 1);
+  if (cut) ctx.backStock = Math.max(0, +cut.params.backStock || 0);
 
   const run = (prog, op, extra) => {
     const def = OP_TYPES[op.type];
@@ -74,6 +76,7 @@ export function buildProgram(project) {
     if (!pick) { errors.push({ op: op.id, msg: `${op.name}: önce Karşı İş Miline Al işlemi gerekli` }); continue; }
     run(p2, op);
   }
+  if (cut && ctx.backStock > 0 && !ops.some(o => o.type === 'backTurn')) errors.push({ op: cut.id, msg: `Arka alın payı ${ctx.backStock} mm bırakılıyor ama Arka Tornalama işlemi yok` });
   if (pick && !ops.some(o => o.type === 'eject')) warnings.push({ op: pick.id, msg: 'Parça atma işlemi yok: parça karşı iş milinde kalır' });
   p2.spindle({ which: 'sub', dir: 'stop' });
   p2.m('programEnd');

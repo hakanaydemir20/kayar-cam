@@ -26,5 +26,14 @@ export function buildContext(project) {
     /** z konumundaki parça yarıçapı (bitmiş) */
     rAt(z) { return real.at(z); },
     safeX: stock.barDia + 2,
+    grip: 6,          // karşı iş milinde tutma boyu (buildProgram ayarlar)
+    backStock: 0,     // kesmede arka alın payı (buildProgram ayarlar)
+    /** Arka (G55) çerçevede profil: z' = L − z (arka alından derinlik). z' < 0 boşluk. */
+    backProfile() {
+      const pts = part.profile.map(p => ({ z: L - p.z, r: p.r })).reverse();
+      const b = sampleProfile(pts, -2, L + 2, DZ, 0);
+      for (let i = 0; i < b.n; i++) if (b.zAt(i) < 0 || b.zAt(i) > L) b.r[i] = 0;
+      return b;
+    },
   };
 }

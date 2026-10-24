@@ -19,7 +19,8 @@ describe('stok simülasyonu (Verify)', () => {
     const c = compare(ss.stock, T, p.part.length);
     console.log('verify', { over: c.over, overMax: c.overMax, under: c.under, underMax: c.underMax, cells: c.cells, innerOver: c.innerOver, innerUnder: c.innerUnder });
     expect(c.over).toBe(0);
-    expect(c.under / c.cells).toBeLessThan(0.02);
+    expect(c.under / c.cells).toBeLessThan(0.002);
+    expect(c.underMax).toBeLessThan(0.05);
   });
 });
 

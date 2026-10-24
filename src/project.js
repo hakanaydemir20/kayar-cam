@@ -53,14 +53,22 @@ export function autoOperations(p) {
   }
   for (const fl of f.filter(x => x.type === 'flat')) ops.push(makeOp('flatMill', tt(p, 12), { featureId: fl.id }, 'Düzlük C' + fl.c));
   for (const pk of f.filter(x => x.type === 'pocket')) ops.push(makeOp('pocketMill', tt(p, 13), { featureId: pk.id }, 'Cep Ø' + pk.dia));
+  const crossMill = (dia) => p.tools.find(t => t.unit === 'cross' && t.type === 'endmill' && (dia == null || Math.abs(t.dia - dia) < 1e-6));
+  for (const pg of f.filter(x => x.type === 'polygon')) ops.push(makeOp('polygonMill', (crossMill(6) || crossMill())?.id ?? null, { featureId: pg.id }, `Çokgen ${pg.n}×AA${pg.af}`));
+  for (const sl of f.filter(x => x.type === 'odSlot')) ops.push(makeOp('cylSlot', crossMill(sl.width)?.id ?? null, { featureId: sl.id }, `Çap Kanalı ${sl.width} (G7.1)`));
   const back = f.filter(x => x.type === 'axialHole' && x.side === 'back');
-  if (back.length) ops.push(makeOp('pickoff'));
+  const backMill = f.filter(x => (x.type === 'faceSlot' || x.type === 'facePolygon') && x.side === 'back');
+  const needSub = back.length || backMill.length;
+  if (needSub) ops.push(makeOp('pickoff'));
   ops.push(makeOp('cutoff', tt(p, 5)));
+  const backEnd = (dia) => p.tools.find(t => t.unit === 'back' && t.live && t.type === 'endmill' && (dia == null || Math.abs(t.dia - dia) < 1e-6));
+  for (const sl of backMill.filter(x => x.type === 'faceSlot')) ops.push(makeOp('backSlot', backEnd(sl.width)?.id ?? null, { featureId: sl.id }, `Arka Alın Kanalı ${sl.width}`));
+  for (const pg of backMill.filter(x => x.type === 'facePolygon')) ops.push(makeOp('backPolar', backEnd()?.id ?? null, { featureId: pg.id }, `Arka Çokgen ${pg.n}×AA${pg.af} (G12.1)`));
   for (const h of back) {
     const d = p.tools.find(t => (t.unit === 'back' || t.unit === 'rear') && t.type === 'drill' && Math.abs(t.dia - h.dia) < 1e-6);
     ops.push(makeOp('backDrill', d?.id ?? null, { featureId: h.id }, 'Arka Delme Ø' + h.dia));
   }
-  if (back.length) ops.push(makeOp('eject'));
+  if (needSub) ops.push(makeOp('eject'));
   ops.push(makeOp('rechuck'));
   return ops;
 }
@@ -116,5 +124,20 @@ export function saveProject(p) {
 export function loadProject(text) {
   const p = JSON.parse(text);
   if (!p.version || !p.part || !p.tools || !p.ops) throw new Error('Geçersiz proje dosyası');
+  return migrate(p);
+}
+
+/** Eski proje dosyaları: yeni eklenen post/makine anahtarlarını varsayılanlarla tamamla (kullanıcı değerleri korunur) */
+export function migrate(p) {
+  const deep = (def, cur) => {
+    if (cur == null) return clone(def);
+    if (typeof def !== 'object' || Array.isArray(def)) return cur;
+    const out = { ...cur };
+    for (const [k, v] of Object.entries(def)) out[k] = k in cur ? deep(v, cur[k]) : clone(v);
+    return out;
+  };
+  p.post = deep(postDef, p.post);
+  p.machine = deep(machineDef, p.machine);
+  for (const t of p.tools) if (t.xPos == null) t.xPos = 0;
   return p;
 }

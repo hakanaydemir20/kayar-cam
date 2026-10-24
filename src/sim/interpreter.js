@@ -11,9 +11,15 @@ function buildMMap(profile) {
   return map;
 }
 
-function spindleKeyFor(sel, profile) {
+function spindleKeyFor(sel, profile, ch = 1) {
   const a = profile.spindleAddress;
+  // $2'de tahrikli takım adresi arka ünite tahrikini sürer (backLive adresi ayrıca tanımlanmadıysa live ile aynı)
+  if (ch === 2) {
+    const bl = /^S(\d+)=$/.exec(a.backLive || a.live || '');
+    if (bl && +bl[1] === sel) return 'backLive';
+  }
   for (const [k, v] of Object.entries(a)) {
+    if (k === 'backLive') continue;
     const m = /^S(\d+)=$/.exec(v);
     if (m && +m[1] === sel) return k;
   }
@@ -42,6 +48,9 @@ export function interpret(text, ctx) {
       spindle: { main: { dir: 'stop', rpm: 0 }, sub: { dir: 'stop', rpm: 0 }, live: { dir: 'stop', rpm: 0 }, backLive: { dir: 'stop', rpm: 0 } },
       tool: null, toolCode: null, cAxis: false, subCAxis: false, coolant: false,
       g92Start: null,
+      cylR: 0,          // G7.1 silindirik interpolasyon yarıçapı (0 = kapalı)
+      polar: false,     // G12.1 polar interpolasyon
+      hyp: null,        // polar modda hipotetik konum {x, y} (mm)
     };
     const err = (li, msg) => errors.push({ path: ch, line: li, msg });
     const warn = (li, msg) => warnings.push({ path: ch, line: li, msg });
@@ -66,7 +75,7 @@ export function interpret(text, ctx) {
     const snapshot = () => ({
       tool: S.tool, toolCode: S.toolCode, wo: S.wo, plane: S.plane,
       main: { ...S.spindle.main }, sub: { ...S.spindle.sub }, live: { ...S.spindle.live }, backLive: { ...S.spindle.backLive },
-      coolant: S.coolant, cAxis: S.cAxis,
+      coolant: S.coolant, cAxis: S.cAxis, subCAxis: S.subCAxis, cylR: S.cylR, polar: S.polar,
     });
     const rapidTime = (pa, pb) => {
       const a = toM(pa), b = toM(pb);
@@ -123,6 +132,9 @@ export function interpret(text, ctx) {
       const target = { ...S.pos };
       let hasAxis = false, motion = null, arcC = {}, dwell = null;
       const mcodes = [];
+      const isG = (v) => w.some(wd => wd.a === 'G' && Math.abs(wd.v - v) < 1e-9);
+      const cylLine = isG(7.1);
+      const hypT = S.polar ? { ...S.hyp } : null;   // polar: hipotetik hedef
       for (const wd of w) {
         switch (wd.a) {
           case 'O': case 'N': break;
@@ -131,6 +143,13 @@ export function interpret(text, ctx) {
             const gv = wd.v;
             if ([0, 1, 2, 3, 32, 92].includes(gv)) motion = 'G' + gv;
             else if (gv === 4) dwell = 0;
+            else if (Math.abs(gv - 7.1) < 1e-9) { /* C kelimesi yarıçap (aşağıda) */ }
+            else if (Math.abs(gv - 12.1) < 1e-9) {
+              if (!S.polar) { const rr = S.pos.X / 2, a = (S.pos.C || 0) * Math.PI / 180; S.hyp = { x: rr * Math.cos(a), y: rr * Math.sin(a) }; }
+              S.polar = true;
+              if (ch === 1 ? !S.cAxis : !S.subCAxis) err(li, 'G12.1 için C ekseni modu açık olmalı');
+            }
+            else if (Math.abs(gv - 13.1) < 1e-9) { S.polar = false; S.hyp = null; }
             else if (gv === 17) S.plane = 'xy';
             else if (gv === 18) S.plane = 'zx';
             else if (gv === 19) S.plane = 'yz';
@@ -144,7 +163,18 @@ export function interpret(text, ctx) {
             else warn(li, 'Simülasyonda desteklenmeyen G kodu: ' + g);
             break;
           }
-          case 'X': case 'Y': case 'Z': case 'C':
+          case 'C':
+            if (cylLine) {
+              S.cylR = wd.v;
+              if (wd.v > 0 && (ch === 1 ? !S.cAxis : !S.subCAxis)) err(li, 'G7.1 için C ekseni modu açık olmalı');
+              break;
+            }
+            if (S.polar) { hypT.y = wd.v; hasAxis = true; break; }
+            target.C = wd.v; hasAxis = true; break;
+          case 'X':
+            if (S.polar && hypT) { hypT.x = wd.v / 2; hasAxis = true; break; }
+            target.X = wd.v; hasAxis = true; break;
+          case 'Y': case 'Z':
             target[wd.a] = wd.v; hasAxis = true; break;
           case 'U': if (dwell != null) dwell = wd.v; else { target.X = S.pos.X + wd.v; hasAxis = true; } break;
           case 'W': target.Z = S.pos.Z + wd.v; hasAxis = true; break;
@@ -155,7 +185,7 @@ export function interpret(text, ctx) {
           case 'R': arcC.R = wd.v; break;
           case 'F': S.F = wd.v; break;
           case 'S': {
-            const key = wd.sel != null ? spindleKeyFor(wd.sel, profile) : workSpindle();
+            let key = wd.sel != null ? spindleKeyFor(wd.sel, profile, ch) : workSpindle();
             if (!key) { err(li, 'Bilinmeyen iş mili seçimi S' + wd.sel); break; }
             if (S._g50) { S.maxRpm = wd.v; S._g50 = false; }
             else if (S.css && (key === 'main' || key === 'sub')) S.vc = wd.v;
@@ -201,7 +231,8 @@ export function interpret(text, ctx) {
       if (dwell != null) { pushMove({ kind: 'dwell', line: li, from: { ...S.pos }, to: { ...S.pos }, dur: dwell }); return; }
       if (motion) S.motion = motion;
       if (!hasAxis) return;
-      if (target.C !== S.pos.C && ch === 1 && !S.cAxis && S.tool) err(li, 'C ekseni modu kapalıyken C hareketi');
+      if (S.polar) { polarMove(li, hypT, target); return; }
+      if (target.C !== S.pos.C && S.tool && (ch === 1 ? !S.cAxis : !S.subCAxis)) err(li, 'C ekseni modu kapalıyken C hareketi');
       checkLimits(li, target);
       const from = { ...S.pos };
 
@@ -211,7 +242,7 @@ export function interpret(text, ctx) {
           break;
         case 'G1': {
           requireCutReady(li);
-          const L = dist(from, target);
+          const L = dist(from, target, S.cylR);
           const f = feedMmMin(li);
           pushMove({ kind: 'feed', line: li, from, to: { ...target }, feed: f, rpm: curRpm(li), dur: (L / f) * 60 });
           break;
@@ -249,6 +280,34 @@ export function interpret(text, ctx) {
       if (S.motion !== 'G92') S._inG92 = false;
       S.pos = target;
     });
+
+    /** Polar interpolasyon (G12.1): hipotetik (x, y) doğrusu → gerçek X (çap) / C (derece), küçük adımlarla */
+    function polarMove(li, hT, target) {
+      if (S.motion === 'G2' || S.motion === 'G3') { err(li, 'Polar modda G2/G3 desteklenmiyor'); return; }
+      if (S.motion !== 'G0' && S.motion !== 'G1') { err(li, 'Polar modda yalnız G0/G1'); return; }
+      const h0 = S.hyp, len = Math.hypot(hT.x - h0.x, hT.y - h0.y, (target.Z ?? S.pos.Z) - S.pos.Z);
+      const n = Math.max(1, Math.ceil(Math.hypot(hT.x - h0.x, hT.y - h0.y) / 0.25));
+      const feed = S.motion === 'G1' ? feedMmMin(li) : 0;
+      if (S.motion === 'G1') requireCutReady(li);
+      let prev = { ...S.pos };
+      for (let k = 1; k <= n; k++) {
+        const t = k / n;
+        const x = h0.x + (hT.x - h0.x) * t, y = h0.y + (hT.y - h0.y) * t;
+        const rho = Math.hypot(x, y);
+        if (rho < 0.05) err(li, 'Polar interpolasyon merkezden geçiyor (C hızı sınırsız)');
+        let c = Math.atan2(y, x) * 180 / Math.PI;
+        while (c - prev.C > 180) c -= 360;
+        while (c - prev.C < -180) c += 360;
+        const cur = { ...prev, X: 2 * rho, C: c, Z: S.pos.Z + ((target.Z ?? S.pos.Z) - S.pos.Z) * t };
+        checkLimits(li, cur);
+        const segL = len / n;
+        if (S.motion === 'G0') pushMove({ kind: 'rapid', line: li, from: prev, to: { ...cur }, dur: rapidTime(prev, cur) });
+        else pushMove({ kind: 'feed', line: li, from: prev, to: { ...cur }, feed, rpm: curRpm(li), dur: (segL / feed) * 60 });
+        prev = cur;
+      }
+      S.pos = prev;
+      S.hyp = { x: hT.x, y: hT.y };
+    }
 
     function arcGeom(plane, a, b, c, cw, li) {
       let u0, v0, u1, v1, cu, cv, axU, axV, axW;
@@ -291,8 +350,9 @@ function eventTime(key) {
   return 0.05;
 }
 
-function dist(a, b) {
-  return Math.hypot((b.X - a.X) / 2, b.Y - a.Y, b.Z - a.Z);
+function dist(a, b, cylR = 0) {
+  const c = cylR > 0 ? ((b.C - a.C) * Math.PI / 180) * cylR : 0;  // G7.1: yüzey boyunca
+  return Math.hypot((b.X - a.X) / 2, b.Y - a.Y, b.Z - a.Z, c);
 }
 
 /** Bekleme kodlarına göre iki kanalın zaman çizelgesini hizalar; t0/t1 atar. */

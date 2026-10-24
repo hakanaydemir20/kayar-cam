@@ -100,6 +100,7 @@ function postPath(prog, P, meta, pi) {
   };
   const motion = (g) => { if (st.motion === g) return ''; st.motion = g; return g + ' '; };
   const note = (pos) => {
+    if (st.polar) return; // polar modda program X/C hipotetiktir (öz-kontrol yorumlayıcının dönüşümüyle ayrıca yapılır)
     for (const a of ['X', 'Y', 'Z', 'C']) if (pos[a] != null && !(a === 'Y' && prog.channel === 2)) intent[a] = a === 'Z' && prog.channel === 1 && meta.zShift ? +pos[a] - meta.zShift : +pos[a];
     if (lines.length) checks.push({ line: lines.length - 1, pos: { ...intent } });
   };
@@ -134,7 +135,7 @@ function postPath(prog, P, meta, pi) {
           main: [C.mainCW, C.mainCCW, C.mainStop, P.spindleAddress.main],
           sub: [C.subCW, C.subCCW, C.subStop, P.spindleAddress.sub],
           live: [C.liveCW, C.liveCCW, C.liveStop, P.spindleAddress.live],
-          backLive: [C.backLiveCW, C.backLiveCCW, C.backLiveStop, P.spindleAddress.live],
+          backLive: [C.backLiveCW, C.backLiveCCW, C.backLiveStop, P.spindleAddress.backLive || P.spindleAddress.live],
         }[it.which];
         if (it.dir === 'stop') { emit(map[2]); break; }
         const m = it.dir === 'ccw' ? map[1] : map[0];
@@ -199,6 +200,19 @@ function postPath(prog, P, meta, pi) {
         break;
       }
       case 'wait': emit(waitCode(P, it.n) + ' (BEKLE ' + it.n + ')'); break;
+      case 'cyl': {
+        const tpl = it.r > 0 ? (P.cylOn || 'G7.1 C{r}') : (P.cylOff || 'G7.1 C0.');
+        emit(tpl.replace('{r}', fmt(it.r, dec)));
+        st.motion = null;
+        break;
+      }
+      case 'polar': {
+        emit(it.on ? (P.polarOn || 'G12.1') : (P.polarOff || 'G13.1'));
+        st.polar = !!it.on;
+        delete st.pos.X; delete st.pos.C; delete intent.X; delete intent.C; // X/C anlamı değişti: yeniden yazılır
+        st.motion = null;
+        break;
+      }
       case 'dwell': emit('G4 U' + fmt(it.sec, 3)); break;
       default: throw new Error('Bilinmeyen IR: ' + it.k);
     }

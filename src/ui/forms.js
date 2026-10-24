@@ -30,11 +30,16 @@ export const OP_PARAMS = {
   flatMill: [['featureId', 'Düzlük', 'feat:flat'], ['ap', 'Paso (radyal)', 'mm'], ['stepover', 'Yanal adım (×D)', '']],
   pocketMill: [['featureId', 'Cep', 'feat:pocket'], ['stepDown', 'Helis adımı (devir başına)', 'mm'], ['stepOver', 'Yanal adım', 'mm']],
   pickoff: [['grip', 'Tutma boyu', 'mm'], ['feed', 'Yaklaşma ilerlemesi', 'mm/dak']],
-  cutoff: [['feed', 'İlerleme (boş = takım)', 'mm/dev'], ['rpm', 'Devir (boş = Vc’den, senkron)', 'dev/dak'], ['endX', 'Bitiş X (çap)', 'mm']],
+  cutoff: [['feed', 'İlerleme (boş = takım)', 'mm/dev'], ['rpm', 'Devir (boş = Vc’den, senkron)', 'dev/dak'], ['endX', 'Bitiş X (çap)', 'mm'], ['backStock', 'Arka alın payı (arka tornalamada alınır)', 'mm']],
   backDrill: [['featureId', 'Arka delik', 'feat:axialHole:back'], ['peck', 'Gagalama', 'mm'], ['feed', 'İlerleme (boş = takım)', 'mm/dev']],
   backTap: [['featureId', 'Arka delik', 'feat:axialHole:back']],
   eject: [],
   rechuck: [],
+  polygonMill: [['featureId', 'Çokgen', 'feat:polygon'], ['ap', 'Paso (radyal)', 'mm'], ['stepover', 'Yanal adım (×D)', '']],
+  cylSlot: [['featureId', 'Çap kanalı', 'feat:odSlot'], ['stepDown', 'Paso derinliği', 'mm']],
+  backTurn: [['face', 'Arka alın pasosu', 'bool'], ['ap', 'Paso (radyal / alın)', 'mm'], ['allowX', 'Kaba payı X (çapta)', 'mm'], ['allowZ', 'Kaba payı Z', 'mm'], ['feed', 'İlerleme (boş = takım)', 'mm/dev'], ['roughFeed', 'Kaba ilerleme (boş = ilerleme)', 'mm/dev'], ['vc', 'Kesme hızı (boş = takım)', 'm/dak']],
+  backSlot: [['featureId', 'Arka alın kanalı', 'feat:faceSlot:back'], ['stepDown', 'Paso derinliği', 'mm']],
+  backPolar: [['featureId', 'Arka alın çokgeni', 'feat:facePolygon:back'], ['stepDown', 'Paso derinliği', 'mm'], ['stepOver', 'Radyal adım (×D)', '']],
 };
 
 export const TOOL_FIELDS = [
@@ -56,8 +61,12 @@ export const FEATURE_FIELDS = {
   flat: [['c', 'C açısı', '°'], ['depth', 'Derinlik (dış çaptan)', 'mm'], ['z0', 'Z başlangıç', 'mm'], ['z1', 'Z bitiş', 'mm']],
   thread: [['dia', 'Nominal çap', 'mm'], ['pitch', 'Hatve', 'mm'], ['z0', 'Z başlangıç', 'mm'], ['z1', 'Z bitiş', 'mm']],
   pocket: [['dia', 'Cep çapı', 'mm'], ['depth', 'Derinlik', 'mm'], ['z', 'Z konumu', 'mm'], ['c', 'C açısı', '°']],
+  polygon: [['n', 'Kenar sayısı', 'adet'], ['af', 'Anahtar ağzı', 'mm'], ['z0', 'Z başlangıç', 'mm'], ['z1', 'Z bitiş', 'mm'], ['c', 'İlk kenar C açısı', '°']],
+  odSlot: [['width', 'Genişlik (= freze çapı)', 'mm'], ['depth', 'Derinlik', 'mm'], ['z0', 'Başlangıç Z', 'mm'], ['c0', 'Başlangıç C', '°'], ['z1', 'Bitiş Z', 'mm'], ['c1', 'Bitiş C', '°']],
+  faceSlot: [['side', 'Taraf', 'select:sideBack'], ['width', 'Genişlik (= freze çapı)', 'mm'], ['depth', 'Derinlik', 'mm'], ['c', 'C2 açısı', '°']],
+  facePolygon: [['side', 'Taraf', 'select:sideBack'], ['n', 'Kenar sayısı', 'adet'], ['af', 'Anahtar ağzı', 'mm'], ['depth', 'Derinlik', 'mm'], ['c', 'Dönüş açısı', '°']],
 };
-export const FEATURE_LABELS = { axialHole: 'Eksenel Delik', crossHole: 'Çapraz Delik', flat: 'Düzlük', thread: 'Diş', pocket: 'Cep' };
+export const FEATURE_LABELS = { axialHole: 'Eksenel Delik', crossHole: 'Çapraz Delik', flat: 'Düzlük', thread: 'Diş', pocket: 'Cep', polygon: 'Çokgen (çap)', odSlot: 'Çap Kanalı (G7.1)', faceSlot: 'Alın Kanalı', facePolygon: 'Alın Çokgeni (G12.1)' };
 
 export function featureText(f) {
   switch (f.type) {
@@ -66,6 +75,10 @@ export function featureText(f) {
     case 'flat': return `C${f.c}° derinlik ${f.depth}  Z${f.z0}–${f.z1}`;
     case 'thread': return `M${f.dia}×${f.pitch}  Z${f.z0}–${f.z1}`;
     case 'pocket': return `Ø${f.dia} derinlik ${f.depth} Z${f.z} C${f.c}°`;
+    case 'polygon': return `${f.n} kenar AA${f.af} Z${f.z0}–${f.z1}`;
+    case 'odSlot': return `G${f.width}×${f.depth} Z${f.z0}/C${f.c0}° → Z${f.z1}/C${f.c1}°`;
+    case 'faceSlot': return `${f.side === 'back' ? 'Arka' : 'Ön'} ${f.width}×${f.depth} C${f.c || 0}°`;
+    case 'facePolygon': return `${f.side === 'back' ? 'Arka' : 'Ön'} ${f.n} kenar AA${f.af} derinlik ${f.depth}`;
     default: return f.type;
   }
 }
@@ -83,7 +96,8 @@ export function field(obj, key, label, unit, kind, onChange, opts = {}) {
     const which = kind.slice(7);
     const items = opts.items || (which === 'type' ? Object.entries(TOOL_TYPES).map(([k, d]) => [k, d.label])
       : which === 'unit' ? Object.entries(UNITS).map(([k, d]) => [k, d.label])
-        : which === 'side' ? [['front', 'Ön'], ['back', 'Arka']] : []);
+        : which === 'side' ? [['front', 'Ön'], ['back', 'Arka']]
+          : which === 'sideBack' ? [['back', 'Arka (karşı iş mili, tahrikli)']] : []);
     inp = h('select', {}, items.map(([k, l]) => h('option', { value: k }, l)));
     inp.value = v ?? '';
     const numeric = items.length && typeof items[items.length - 1][0] === 'number';
