@@ -208,10 +208,17 @@ export class StockSim {
     this.bs = cutOp ? Math.max(0, +cutOp.params.backStock || 0) : 0;   // arka alın payı (kesme L+bs'de)
     this.opts = { dMin: -(project.stock.faceStock + 1), dMax: L + this.cutW + 12, dz: 0.05, nth: 120, R: project.stock.barDia / 2 };
     this.moves = [];
-    for (const p of sim.paths) for (const m of p.moves) this.moves.push(m);
+    for (const p of sim.paths) for (const m of p.moves) if (!opts.only || m.path === opts.only) this.moves.push(m);
     this.moves.sort((a, b) => a.t0 - b.t0 || a.path - b.path);
     this.totalTime = Math.max(0, ...sim.paths.map(p => p.totalTime || 0));
     this.collider = opts?.bodies === false ? null : new Collider(project, this);
+    // örtüşen çevrim: karşı iş mili çevrim başında önceki parçayı tutar (ön işlemleri bu programın $1'i ile yapılmış)
+    this.overlap = !opts.only && !!project.sync?.overlap && !!project.ops.find(o => o.type === 'pickoff' && o.enabled) && sim.paths.length > 1;
+    if (this.overlap) {
+      const pre = new StockSim(project, sim, { only: 1, bodies: false }).runAll();
+      this.prevTemplate = pre.stock.clone();
+      this.prev = pre.stock.clone();
+    }
     this.reset();
   }
   reset() {
@@ -221,7 +228,8 @@ export class StockSim {
     for (let i = 0; i < S.nz; i++) if (S.dAt(i) < -fs - 1e-6) { S.r.fill(0, i * S.nth, (i + 1) * S.nth); S.rowMax[i] = 0; }
     S.markDirty(0, S.nz - 1);
     this.mi = 0; this.t = 0; this.pending = [];
-    this.state = { mainOpen: false, frontWorld: null, barOffset: 0, z1: -1, subClosed: false, separated: false, attached: 'main', mainC: 0, subC: 0 };
+    this.state = { mainOpen: false, frontWorld: null, barOffset: 0, z1: -1, subClosed: !!this.overlap, separated: false, attached: 'main', mainC: 0, subC: 0, prev: this.overlap ? 'sub' : null };
+    if (this.overlap) { this.prev.copyFrom(this.prevTemplate); this.prev.markDirty(0, this.prev.nz - 1); }
     this.collisions = [];
     this.events = [];
     if (this.collider) this.collider.found.clear();
@@ -247,6 +255,8 @@ export class StockSim {
     this.t = t;
   }
   runAll() { this.seek(Infinity); return this; }
+  /** Bitmiş parça ızgarası (Verify): örtüşen çevrimde arka işlemleri bu çevrimde yapılan önceki parça */
+  resultStock() { return this.overlap ? this.prev : this.stock; }
   /** kanal için t anındaki hareket (ikili arama) */
   currentMove(path, t = this.t) {
     const ms = this.sim.paths[path - 1]?.moves;
@@ -268,8 +278,12 @@ export class StockSim {
         case 'mainChuckOpen': st.frontWorld = this.mainFrontWorld(m.mTo.Z); st.mainOpen = true; break;
         case 'mainChuckClose': st.mainOpen = false; st.barOffset = st.frontWorld - m.mTo.Z; break;
         case 'subChuckClose': st.subClosed = true; this.checkSeparation(); break;
-        case 'subChuckOpen': st.subClosed = false; if (st.attached === 'sub') { st.attached = 'ejected'; this.events.push({ t: m.t1, type: 'eject' }); } break;
-        case 'partEject': if (st.attached === 'sub') st.attached = 'ejected'; break;
+        case 'subChuckOpen':
+          st.subClosed = false;
+          if (st.prev === 'sub') { st.prev = 'ejected'; this.events.push({ t: m.t1, type: 'eject' }); }
+          else if (st.attached === 'sub') { st.attached = 'ejected'; this.events.push({ t: m.t1, type: 'eject' }); }
+          break;
+        case 'partEject': if (st.prev === 'sub') st.prev = 'ejected'; else if (st.attached === 'sub') st.attached = 'ejected'; break;
       }
       return;
     }
@@ -384,8 +398,16 @@ export class StockSim {
       }
       return 0;
     }
-    // ---- kanal 2: karşı iş milindeki parça ----
-    if (st.attached !== 'sub' || m.state.wo !== 'G55') return 0;
+    // ---- kanal 2: karşı iş milindeki parça (örtüşen çevrimde önceki parça) ----
+    if (m.state.wo !== 'G55') return 0;
+    const S2 = this.subStock();
+    return S2 ? this.cutSub(m, tool, p, mp, prevP, prevM, S2) : 0;
+  }
+
+  /** Karşı iş milinin tuttuğu parçanın ızgarası (yoksa null) */
+  subStock() { return this.state.prev === 'sub' ? this.prev : this.state.attached === 'sub' ? this.stock : null; }
+
+  cutSub(m, tool, p, mp, prevP, prevM, S) {
     const db = this.L - p.Z; // arka alından derinlik → ön çerçeve
     if (tool.type === 'turn') {
       // arka tornalama: ön tornalama kesme profili arka alından aynalanır (z' = L − d)
@@ -396,7 +418,7 @@ export class StockSim {
       if (i1 < i0) return 0;
       const cap = new Array(i1 - i0 + 1);
       for (let i = i0; i <= i1; i++) cap[i - i0] = sh.f(this.L - S.dAt(i));
-      return spinning ? S.applyRotCap(i0, i1, cap) : this.capCheckOnly(i0, i1, cap);
+      return spinning ? S.applyRotCap(i0, i1, cap) : this.capCheckOnly(i0, i1, cap, S);
     }
     if (tool.live && tool.unit === 'back' && (tool.type === 'endmill' || tool.type === 'ldrill')) {
       // arka eksenel tahrikli takım: parça çerçevesinde disk merkezi (takım dünya +z'de, parça C2 kadar dönmüş)
@@ -417,9 +439,8 @@ export class StockSim {
     return 0;
   }
 
-  capCheckOnly(i0, i1, cap) {
+  capCheckOnly(i0, i1, cap, S = this.stock) {
     // iş mili dururken tornalama takımı malzemeye değerse çarpışma
-    const S = this.stock;
     let worst = 0;
     for (let i = Math.max(0, i0); i <= Math.min(S.nz - 1, i1); i++) {
       const c = cap[i - i0];

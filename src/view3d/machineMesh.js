@@ -372,6 +372,7 @@ export class MachineModel {
   attachStock(stockSim) {
     if (this.partMesh) { this.partMesh.mesh.removeFromParent(); this.partMesh.dispose(); }
     if (this.barMesh) { this.barMesh.mesh.removeFromParent(); this.barMesh.dispose(); }
+    if (this.prevMesh) { this.prevMesh.mesh.removeFromParent(); this.prevMesh.dispose(); this.prevMesh = null; }
     const S = stockSim.stock;
     const iL = S.idx(stockSim.L + (stockSim.bs || 0) + stockSim.cutW * 0.5);
     this.stockSim = stockSim;
@@ -383,6 +384,11 @@ export class MachineModel {
     this.root.add(this.mainHolder);
     this.subSpin = new THREE.Group(); this.subHolder = new THREE.Group();
     this.subHolder.add(this.subSpin); this.root.add(this.subHolder);
+    if (stockSim.prev) {
+      // örtüşen çevrim: karşı iş milinde önceki çevrimin parçası (ön işlemleri bitmiş)
+      this.prevMesh = new StockMesh(stockSim.prev, 0, iL);
+      this.subSpin.add(this.prevMesh.mesh);
+    }
   }
 
   /** Simülasyon durumuna göre poz */
@@ -421,6 +427,11 @@ export class MachineModel {
     else if (s2 && s2.sub.dir !== 'stop') this.subNose.rotation.x += spinStep(m2, dt, s2.sub.dir, 'sub');
     // parça karşı iş milinde mi?
     const grip = stockSim.sim.frames ? stockSim.L - stockSim.sim.frames.projection : 5;
+    if (this.prevMesh) {
+      this.prevMesh.mesh.visible = st.prev === 'sub';
+      if (st.prev === 'sub') { this.subHolder.position.set(subFace + grip, 0, subLat); this.subSpin.rotation.x = this.subNose.rotation.x; }
+      this.prevMesh.update(dt === 0);
+    }
     if (st.attached === 'sub' || st.attached === 'ejected') {
       if (this.partMesh.mesh.parent !== this.subSpin) this.subSpin.add(this.partMesh.mesh);
       this.subHolder.position.set(subFace + grip, 0, subLat);

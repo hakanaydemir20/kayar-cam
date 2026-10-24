@@ -57,26 +57,27 @@ export class Collider {
     this.bush = bushBodies();
     this.sub = subBodies(project.stock.barDia / 2);
     this.barR = project.stock.barDia / 2;
-    this.binVer = -1;
+    this.cache = new Map();   // ızgara → {ver, bins}
     this.found = new Map();
   }
 
-  /** satır aralığında en büyük dış yarıçap (1 mm kutucuk önbelleği) */
-  rowsMax(i0, i1) {
-    const S = this.ss.stock;
-    if (this.binVer !== S.version) {
-      const nb = Math.ceil(S.nz / 20);
-      if (!this.bins || this.bins.length !== nb) this.bins = new Float32Array(nb);
-      for (let k = 0; k < nb; k++) { let m = 0; for (let i = k * 20, e = Math.min(S.nz, k * 20 + 20); i < e; i++) if (S.rowMax[i] > m) m = S.rowMax[i]; this.bins[k] = m; }
-      this.binVer = S.version;
+  /** satır aralığında en büyük dış yarıçap (1 mm kutucuk önbelleği, ızgara başına) */
+  rowsMax(S, i0, i1) {
+    let c = this.cache.get(S);
+    if (!c) { c = { ver: -1, bins: new Float32Array(Math.ceil(S.nz / 20)) }; this.cache.set(S, c); }
+    if (c.ver !== S.version) {
+      const nb = c.bins.length;
+      for (let k = 0; k < nb; k++) { let m = 0; for (let i = k * 20, e = Math.min(S.nz, k * 20 + 20); i < e; i++) if (S.rowMax[i] > m) m = S.rowMax[i]; c.bins[k] = m; }
+      c.ver = S.version;
     }
+    const bins = c.bins;
     i0 = Math.max(0, i0); i1 = Math.min(S.nz - 1, i1);
     if (i1 < i0) return 0;
     let m = 0;
     const b0 = Math.floor(i0 / 20), b1 = Math.floor(i1 / 20);
     if (b1 - b0 < 2) { for (let i = i0; i <= i1; i++) if (S.rowMax[i] > m) m = S.rowMax[i]; return m; }
     for (let i = i0; i < (b0 + 1) * 20; i++) if (S.rowMax[i] > m) m = S.rowMax[i];
-    for (let k = b0 + 1; k < b1; k++) if (this.bins[k] > m) m = this.bins[k];
+    for (let k = b0 + 1; k < b1; k++) if (bins[k] > m) m = bins[k];
     for (let i = b1 * 20; i <= i1; i++) if (S.rowMax[i] > m) m = S.rowMax[i];
     return m;
   }
@@ -87,11 +88,11 @@ export class Collider {
     // hızlı eleme: eksenden uzaklık
     const rho = s.t === 'cyl' ? Math.hypot(s.cy, s.cz - part.axisZ) : rectDist(A[2], A[3], A[4], A[5], 0, part.axisZ);
     if (s.t !== 'cyl' && rho > this.barR + TOL) return 0;
-    const S = this.ss.stock;
+    const S = part.S;
     // x aralığı → d aralığı (d = front − x  ya da  d = base − x)
     const dA = part.base - A[1], dB = part.base - A[0];
     let i0 = Math.max(part.i0, S.idx(Math.max(dA, S.dMin))), i1 = Math.min(part.i1, S.idx(dB));
-    let mr = i1 >= i0 ? this.rowsMax(i0, i1) : 0;
+    let mr = i1 >= i0 ? this.rowsMax(S, i0, i1) : 0;
     if (part.barBeyond && dB > S.dMax && A[0] < part.base - S.dMax) {
       // ızgara dışında kalan çubuk (burç içine kadar)
       if (Math.min(A[1], part.base - S.dMax) > LAYOUT.bushFace) mr = Math.max(mr, this.barR);
@@ -124,9 +125,10 @@ export class Collider {
     const act1 = st1?.tool || null, act2 = st2?.tool || null;
     const iSplit = S.idx(ss.L + (ss.bs || 0) + 0.5 * ss.cutW);
     const front = ss.mainFrontWorld(pose1.m.Z);
-    const mainPart = { base: front, axisZ: 0, i0: st.attached === 'main' ? 0 : iSplit, i1: S.nz - 1, barBeyond: true };
+    const mainPart = { S, base: front, axisZ: 0, i0: st.attached === 'main' ? 0 : iSplit, i1: S.nz - 1, barBeyond: true };
     const grip = ss.sim.frames ? ss.L - ss.sim.frames.projection : 5;
-    const subPart = st.attached === 'sub' ? { base: subFace + grip, axisZ: subLat, i0: 0, i1: iSplit - 1, barBeyond: false } : null;
+    const SS = ss.subStock();
+    const subPart = SS ? { S: SS, base: subFace + grip, axisZ: subLat, i0: 0, i1: iSplit - 1, barBeyond: false } : null;
     const nm = (s) => s.name || 'gövde';
     // gang ↔ parçalar, burç, karşı iş mili, arka ünite
     for (const s of g) {

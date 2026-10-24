@@ -88,11 +88,22 @@ export function buildProgram(project) {
   p1.m('programEnd');
 
   // ---- $2 ----
-  for (const m of mids) runSub(m, midW.get(m.id));
-  if (pick) run(p2, pick, { ...W, rpm: cutRpm });
-  for (const op of ops.filter(o => OP_TYPES[o.type].channel === 2 && o.type !== 'pickoff')) {
-    if (!pick) { errors.push({ op: op.id, msg: `${op.name}: önce Karşı İş Miline Al işlemi gerekli` }); continue; }
-    run(p2, op);
+  const overlap = !!project.sync?.overlap && !!pick;
+  const back = ops.filter(o => OP_TYPES[o.type].channel === 2 && o.type !== 'pickoff');
+  if (!pick) for (const op of back) errors.push({ op: op.id, msg: `${op.name}: önce Karşı İş Miline Al işlemi gerekli` });
+  if (overlap) {
+    // ÖRTÜŞEN ÇEVRİM (ESPRIT): $2 önce önceki çevrimde aldığı parçanın arka işlemlerini yapar ve atar,
+    // sonra yeni parçayı alır. Arka işlemler $1'in ön işlemleriyle aynı anda yürür.
+    if (mids.length) errors.push({ op: mids[0].id, msg: 'Örtüşen çevrim ara bağlamayla kullanılamaz: karşı iş mili o sırada önceki parçayı tutuyor' });
+    if (!back.some(o => o.type === 'eject')) errors.push({ op: pick.id, msg: 'Örtüşen çevrimde parça atma işlemi zorunlu (önceki parça bırakılmadan yeni parça alınamaz)' });
+    p2.comment('ORTUSEN CEVRIM: ONCEKI PARCANIN ARKA ISLEMLERI');
+    p2.comment('ILK CEVRIMDE KARSI IS MILI BOS - ILK PARCA ARKA ISLEMSIZ CIKAR');
+    for (const op of back) run(p2, op);
+    run(p2, pick, { ...W, rpm: cutRpm });
+  } else {
+    for (const m of mids) runSub(m, midW.get(m.id));
+    if (pick) run(p2, pick, { ...W, rpm: cutRpm });
+    if (pick) for (const op of back) run(p2, op);
   }
   if (cut && ctx.backStock > 0 && !ops.some(o => o.type === 'backTurn')) errors.push({ op: cut.id, msg: `Arka alın payı ${ctx.backStock} mm bırakılıyor ama Arka Tornalama işlemi yok` });
   if (pick && !ops.some(o => o.type === 'eject')) warnings.push({ op: pick.id, msg: 'Parça atma işlemi yok: parça karşı iş milinde kalır' });

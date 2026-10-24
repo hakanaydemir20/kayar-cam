@@ -98,7 +98,7 @@ export class App {
       try {
         const ss = new StockSim(this.project, this.result.sim).runAll();
         const T = buildTarget(this.project, ss.opts);
-        const c = compare(ss.stock, T, this.project.part.length);
+        const c = compare(ss.resultStock(), T, this.project.part.length);
         this.verify = { ss, c, ms: performance.now() - t0 };
         this.renderMsgs(); this.renderVerify(); this.applyVerifyColors();
         const bad = this.result.errors.length + ss.collisions.length + (c.over ? 1 : 0);
@@ -170,11 +170,19 @@ export class App {
   applyVerifyColors() {
     if (!this.machine) return;
     const on = $('optVerify').checked && this.verify;
+    const pm = this.machine.prevMesh;
     if (on) {
-      // renkler son durumu gösterir: simülasyonu sona al
-      this.seek(this.totalTime);
-      this.machine.partMesh.setStatusColors(this.verify.c.status);
-    } else this.machine.partMesh.setStatusColors(null);
+      if (pm) {
+        // örtüşen çevrim: bitmiş parça = karşı iş milindeki önceki parça; atılmadan hemen önceki ana git
+        const ev = this.result.sim.paths[1].moves.find(m => m.kind === 'event' && m.event === 'subChuckOpen');
+        this.seek(ev ? ev.t0 - 1e-3 : this.totalTime);
+        pm.setStatusColors(this.verify.c.status);
+      } else {
+        // renkler son durumu gösterir: simülasyonu sona al
+        this.seek(this.totalTime);
+        this.machine.partMesh.setStatusColors(this.verify.c.status);
+      }
+    } else { this.machine.partMesh.setStatusColors(null); if (pm) pm.setStatusColors(null); }
   }
 
   frame(dt) {
@@ -641,6 +649,13 @@ export class App {
     if (!r.sim) return;
     const T = this.totalTime || 1;
     const colors = ['#38bdf8', '#a78bfa', '#34d399', '#fbbf24', '#f472b6', '#60a5fa', '#f59e0b', '#22d3ee'];
+    // senkron ayarları (ESPRIT senkronizasyon yöneticisi)
+    const ov = h('input', { type: 'checkbox' });
+    ov.checked = !!P.sync?.overlap;
+    ov.addEventListener('change', () => { P.sync = { ...(P.sync || {}), overlap: ov.checked }; this.recalc(true); });
+    box.append(h('div', { class: 'syncbar' },
+      h('label', { title: '$2, önceki çevrimde aldığı parçanın arka işlemlerini ve atmayı önce yapar, sonra yeni parçayı alır. Arka işlemler $1 ön işlemleriyle paralel yürür. İlk çevrimde karşı iş mili boştur.' }, ov, ' Örtüşen çevrim (arka işlemler bir sonraki parçanın ön işlemleriyle paralel)'),
+      h('span', { class: 'sb-hint' }, 'Blokları sürükleyip başka bir bloğun üstüne bırakarak sırayı değiştirin.')));
     box.append(h('div', { class: 'axis' }, ...[0, 0.25, 0.5, 0.75, 1].map(f => h('span', {}, (T * f).toFixed(1) + 's'))));
     for (const ch of [1, 2]) {
       const lane = h('div', { class: 'lt' });
@@ -649,7 +664,21 @@ export class App {
         const ot = this.opTimes[op.id];
         if (!ot || ot.path !== ch) continue;
         const left = (ot.t0 / T) * 100, w = Math.max(0.3, ((ot.t1 - ot.t0) / T) * 100);
-        lane.append(h('div', { class: 'blk', title: `${op.name}  ${(ot.t1 - ot.t0).toFixed(2)} s`, style: { left: left + '%', width: w + '%', background: colors[k++ % colors.length] }, onclick: () => { this.sel = { kind: 'op', id: op.id }; this.renderTree(); this.renderProps(); this.seek(ot.t0); } }, op.name));
+        const blk = h('div', { class: 'blk', draggable: 'true', title: `${op.name}  ${(ot.t1 - ot.t0).toFixed(2)} s — sürükleyerek sırala`, style: { left: left + '%', width: w + '%', background: colors[k++ % colors.length] }, onclick: () => { this.sel = { kind: 'op', id: op.id }; this.renderTree(); this.renderProps(); this.seek(ot.t0); } }, op.name);
+        blk.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/op', op.id); });
+        blk.addEventListener('dragover', (e) => { e.preventDefault(); blk.classList.add('drag-over'); });
+        blk.addEventListener('dragleave', () => blk.classList.remove('drag-over'));
+        blk.addEventListener('drop', (e) => {
+          e.preventDefault(); blk.classList.remove('drag-over');
+          const id = e.dataTransfer.getData('text/op');
+          const from = P.ops.findIndex(o => o.id === id);
+          if (from < 0 || id === op.id) return;
+          if (OP_TYPES[P.ops[from].type].channel !== ch) { this.toast('İşlem yalnız kendi kanalında sıralanabilir'); return; }
+          const [mv] = P.ops.splice(from, 1);
+          P.ops.splice(P.ops.findIndex(o => o.id === op.id), 0, mv);
+          this.recalc(true);
+        });
+        lane.append(blk);
       }
       for (const m of r.sim.paths[ch - 1]?.moves || []) if (m.kind === 'wait') lane.append(h('div', { class: 'wt', style: { left: (m.t1 / T) * 100 + '%' } }, h('span', {}, 'W' + m.n)));
       if (ch === 1) lane.append(h('div', { class: 'cursor', id: 'syncCursor' }));
