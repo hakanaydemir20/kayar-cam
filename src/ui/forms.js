@@ -35,6 +35,7 @@ export const OP_PARAMS = {
   backTap: [['featureId', 'Arka delik', 'feat:axialHole:back']],
   eject: [],
   rechuck: [],
+  midRechuck: [['atZ', 'Ara bağlama konumu (parça dışarıda, Z)', 'mm'], ['shift', 'Başlık geri çekme', 'mm'], ['grip', 'Karşı iş mili tutma boyu', 'mm'], ['feed', 'Tutma yaklaşma ilerlemesi', 'mm/dak']],
   polygonMill: [['featureId', 'Çokgen', 'feat:polygon'], ['ap', 'Paso (radyal)', 'mm'], ['stepover', 'Yanal adım (×D)', '']],
   cylSlot: [['featureId', 'Çap kanalı', 'feat:odSlot'], ['stepDown', 'Paso derinliği', 'mm']],
   engrave: [['featureId', 'Yazı', 'feat:engrave']],

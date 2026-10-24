@@ -393,7 +393,7 @@ export class MachineModel {
     this.pose1 = pose1; this.pose2 = pose2; this.m1 = m1; this.m2 = m2;
     // ana parça ön alnı (dünya x)
     const front = stockSim.mainFrontWorld(pose1.m.Z);
-    this.head.position.x = pose1.m.Z + st.barOffset - HEAD_K;
+    this.head.position.x = pose1.m.Z - HEAD_K;   // başlık makine Z1'inde (pens açıkken çubuktan bağımsız geri gider)
     this.mainHolder.position.x = front;
     this.bar.position.x = front - stockSim.stock.dMax - 450;
     // dönüş

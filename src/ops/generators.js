@@ -26,6 +26,7 @@ export const OP_TYPES = {
   backTap:    { label: 'Arka Kılavuz', channel: 2, tools: ['tap'] },
   eject:      { label: 'Parça Atma', channel: 2, tools: [] },
   rechuck:    { label: 'Çubuk İlerletme', channel: 1, tools: [] },
+  midRechuck: { label: 'Ara Bağlama (uzun parça)', channel: 1, tools: [] },
   polygonMill:{ label: 'Çokgen Frezeleme (C/Y)', channel: 1, tools: ['endmill'] },
   cylSlot:    { label: 'Silindirik Kanal (G7.1)', channel: 1, tools: ['endmill'] },
   engrave:    { label: 'Çapa Yazı / Gravür (G7.1)', channel: 1, tools: ['endmill'] },
@@ -53,6 +54,7 @@ export function defaultParams(type) {
     case 'backTap': return { featureId: null };
     case 'eject': return {};
     case 'rechuck': return {};
+    case 'midRechuck': return { atZ: 100, shift: 100, grip: 6, feed: 500 };
     case 'polygonMill': return { featureId: null, ap: 1.0, stepover: 0.6 };
     case 'cylSlot': return { featureId: null, stepDown: 0.5 };
     case 'engrave': return { featureId: null };
@@ -137,22 +139,43 @@ GEN.face = (prog, ctx, op, tool) => {
   endTool(prog, ctx);
 };
 
-GEN.rough = (prog, ctx, op, tool) => {
+/** Segment (kılavuz burç bölgesi) sınırları: extra.zFrom/zTo yoksa tüm boy */
+function zRange(ctx, extra) {
+  const z0 = extra?.zFrom != null ? extra.zFrom : -0.5;
+  const z1 = extra?.zTo != null ? Math.min(extra.zTo, ctx.zEnd) : ctx.zEnd;
+  return [z0, z1, extra?.zFrom != null && extra.zFrom > 0];
+}
+
+/** Kontur pasosu girişi: segment içinden başlıyorsa bitmiş bölgeye 0.3 mm geri, profilin 0.2 mm üstüne hızlı, sonra G1 */
+function contourEntry(prog, ctx, P, z0, inner, R0, F) {
+  if (!inner) {
+    const zs = Math.max(-0.5, z0);
+    const pts = toPolyline(P, P.idx(zs), P.idx(zs)).map(q => ({ z: q.z, r: Math.min(q.r, R0) }));
+    goto(prog, ctx, r3(2 * Math.max(0, pts[0].r)), r3(pts[0].z));
+    return zs;
+  }
+  const zs = z0 - 0.3, r = Math.min(P.at(zs), R0);
+  goto(prog, ctx, r3(2 * (r + 0.2)), r3(zs));
+  prog.line({ X: r3(2 * r) }, F);
+  return zs;
+}
+
+GEN.rough = (prog, ctx, op, tool, extra) => {
   const p = op.params;
   const env = ctx.envelopeFor(tool);
   const A = dilate(env, p.allowZ, p.allowX / 2);
   const P = noseTipPath(A, tool.noseR);
   const R0 = ctx.barR;
+  const [z0, z1, inner] = zRange(ctx, extra);
   startTurning(prog, ctx, tool, op);
+  if (extra?.seg) prog.comment(`SEGMENT ${extra.seg} Z${r3(Math.max(0, z0))}-${r3(z1)}`);
   const F = p.feed || tool.feed;
-  const iEnd = P.idx(ctx.zEnd);
-  if (!roughLevels(prog, ctx, P, R0, -0.5, ctx.zEnd, p, F)) { prog.comment('KABA: KALDIRILACAK MALZEME YOK'); return; }
+  if (!roughLevels(prog, ctx, P, R0, z0, z1, p, F)) { prog.comment('KABA: KALDIRILACAK MALZEME YOK'); endTool(prog, ctx); return; }
   if (p.contourPass) {
     // yarı finiş kontur pasosu: pay bırakılmış profil boyunca
-    const pts = toPolyline(P, P.idx(-0.3), iEnd).map(q => ({ z: q.z, r: Math.min(q.r, R0 + 0.0) }));
-    const segs = fitSegments(pts, 0.003);
-    goto(prog, ctx, r3(2 * Math.max(0, pts[0].r)), r3(pts[0].z));
-    emitSegments(prog, segs, F, ctx);
+    const zs = contourEntry(prog, ctx, P, z0, inner, R0, F);
+    const pts = toPolyline(P, P.idx(zs), P.idx(z1)).map(q => ({ z: q.z, r: Math.min(q.r, R0 + 0.0) }));
+    emitSegments(prog, fitSegments(pts, 0.003), F, ctx);
     prog.rapid({ X: ctx.safeX });
   }
   endTool(prog, ctx);
@@ -196,16 +219,17 @@ export function roughLevels(prog, ctx, P, R0, zFrom, zTo, p, F) {
   return true;
 }
 
-GEN.finish = (prog, ctx, op, tool) => {
+GEN.finish = (prog, ctx, op, tool, extra) => {
   const p = op.params;
   const env = ctx.envelopeFor(tool);
   const P = noseTipPath(env, tool.noseR);
+  const [z0, z1, inner] = zRange(ctx, extra);
   startTurning(prog, ctx, tool, op);
+  if (extra?.seg) prog.comment(`SEGMENT ${extra.seg} Z${r3(Math.max(0, z0))}-${r3(z1)}`);
   const F = p.feed || tool.feed;
-  const i0 = P.idx(-0.5), i1 = P.idx(ctx.zEnd);
-  const pts = toPolyline(P, i0, i1).map(q => ({ z: q.z, r: Math.min(q.r, ctx.barR) }));
+  const zs = contourEntry(prog, ctx, P, z0, inner, ctx.barR, F);
+  const pts = toPolyline(P, P.idx(zs), P.idx(z1)).map(q => ({ z: q.z, r: Math.min(q.r, ctx.barR) }));
   const segs = fitSegments(pts, p.tol || 0.002);
-  goto(prog, ctx, r3(2 * pts[0].r), r3(pts[0].z));
   emitSegments(prog, segs, F, ctx);
   prog.line({ X: r3(ctx.stock.barDia + 0.6) }, F);
   endTool(prog, ctx);
@@ -499,6 +523,55 @@ GEN.cutoff = (prog, ctx, op, tool, extra) => {
   op._cutRpm = rpm;
 };
 
+/** Ara bağlama ($1): parça atZ kadar dışarıda; karşı iş mili ucu tutar, ana pens açılır, başlık 'shift' kadar geri,
+ *  pens kapanır. Program Z (parça koordinatı) korunur: iş kaydırması G10 P0 Z (makine Z1 = program Z + kaydırma). */
+GEN.midRechuck = (prog, ctx, op, tool, extra) => {
+  const p = op.params;
+  const z1 = ctx.machine.axes.Z1;
+  if (!(p.shift > 0)) throw new Error(`${op.name}: geri çekme boyu (shift) > 0 olmalı`);
+  if (p.atZ - p.shift < z1.min) throw new Error(`${op.name}: geri çekme Z1 alt sınırını aşar (atZ − shift = ${r3(p.atZ - p.shift)})`);
+  if (p.grip >= p.atZ - 2) throw new Error(`${op.name}: tutma boyu parçanın dışarıdaki boyundan küçük olmalı`);
+  prog.comment(`ARA BAGLAMA Z${r3(p.atZ)} GERI ${r3(p.shift)}`);
+  prog.rapid({ X: ctx.safeX });
+  prog.spindle({ which: 'main', dir: 'stop' });
+  prog.rapid({ Y: 0 });
+  prog.rapid({ Z: r3(p.atZ) });
+  prog.wait(extra.a);                // karşı iş mili tutmaya gelebilir
+  prog.wait(extra.b);                // karşı iş mili tuttu
+  prog.m('mainChuckOpen');
+  prog.dwell(0.3);
+  prog.rapid({ Z: r3(p.atZ - p.shift) });
+  prog.m('mainChuckClose');
+  prog.dwell(0.3);
+  // başlık geri gitti, parça yerinde: aynı parça noktası artık makinede 'shift' kadar geride
+  prog.workShift(r3(extra.ext - p.shift));
+  prog.wait(extra.c);                // karşı iş mili bırakabilir
+  ctx.extZ = extra.ext - p.shift;
+};
+/** Ara bağlama ($2 tarafı): G54 aktarma çerçevesinde parça önü dünya x = atZ (parça koordinatı) */
+GEN.midRechuckSub = (prog, ctx, op, tool, extra) => {
+  const p = op.params;
+  const park = subPark(ctx);
+  prog.comment('ARA BAGLAMA - KARSI IS MILI DESTEK');
+  prog.workOffset('G54');
+  prog.spindle({ which: 'sub', dir: 'stop' });
+  prog.rapid({ X: 0 });
+  prog.rapid({ Z: Math.max(park, r3(p.atZ + 5)) });
+  prog.m('subChuckOpen');
+  prog.wait(extra.a);
+  const zg = r3(p.atZ - p.grip);
+  prog.rapid({ Z: r3(zg + 1) });
+  prog.feedMode('min');
+  prog.line({ Z: zg }, p.feed);
+  prog.m('subChuckClose');
+  prog.dwell(0.3);
+  prog.wait(extra.b);
+  prog.wait(extra.c);
+  prog.m('subChuckOpen');
+  prog.dwell(0.3);
+  prog.rapid({ Z: Math.max(park, r3(p.atZ + 5)) });
+};
+
 GEN.rechuck = (prog, ctx, op) => {
   // kesme takımı durdurucu olarak kullanılır: pens aç, başlık geri, pens kapa
   const w = ctx.cutW;
@@ -507,6 +580,7 @@ GEN.rechuck = (prog, ctx, op) => {
   prog.spindle({ which: 'main', dir: 'stop' });
   prog.m('mainChuckOpen');
   prog.dwell(0.3);
+  if (ctx.extZ) { prog.workShift(0); ctx.extZ = 0; } // ara bağlama kaydırması sıfırlanır (pens açıkken: makine yerinde)
   // yeni çubuk alnı kesme bıçağının arka kenarına dayanır (takım ref. + w);
   // bir sonraki çevrimde alın payı kalsın diye alın Z = −alın payı olacak şekilde geri gidilir
   prog.rapid({ Z: r3(-w - (ctx.stock.faceStock || 0)) });
@@ -550,7 +624,11 @@ export function backMaxDepth(ctx) { return ctx.L - ctx.grip - SUB_NUT - 1; }
 export function subPark(ctx) {
   let reach = 0;
   for (const t of ctx.tools.filter(t => t.unit === 'front')) reach = Math.max(reach, 58, rotaryProfile(t).length);
-  return r3(Math.max(ctx.L + 40, reach + 25));
+  const zMax = ctx.machine.axes.Z2.max;
+  const park = Math.min(zMax, Math.max(ctx.L + 40, reach + 25));
+  // uzun parça: Z2 sınırında beklenir; parça önü (L + pay) pens somununa 1 mm'den fazla yaklaşmamalı
+  if (park - SUB_NUT < ctx.L + (ctx.backStock || 0) + 1) throw new Error(`Parça (${ctx.L} mm) karşı iş mili bekleme konumuna sığmıyor (Z2 en çok ${zMax})`);
+  return r3(park);
 }
 
 function backStart(prog, ctx) {

@@ -258,11 +258,11 @@ export class App {
   bindChrome() {
     const P = () => this.project;
     const groups = {
-      rbTurn: ['face', 'rough', 'finish', 'groove', 'thread', 'center', 'drill', 'tap', 'cutoff', 'rechuck'],
+      rbTurn: ['face', 'rough', 'finish', 'groove', 'thread', 'center', 'drill', 'tap', 'cutoff', 'rechuck', 'midRechuck'],
       rbMill: ['crossDrill', 'flatMill', 'polygonMill', 'cylSlot', 'engrave', 'pocketMill'],
       rbSub: ['pickoff', 'backTurn', 'backDrill', 'backTap', 'backSlot', 'backPolar', 'eject'],
     };
-    const icons = { face: '⊣', rough: '▥', finish: '◜', groove: '⊔', thread: '≋', center: '▽', drill: '↧', tap: '⇊', cutoff: '✂', rechuck: '⇤', crossDrill: '⊥', flatMill: '▭', polygonMill: '⬡', cylSlot: '◍', engrave: 'Ａ', pocketMill: '◎', pickoff: '⇥', backTurn: '◺', backDrill: '↤', backTap: '⇇', backSlot: '⊖', backPolar: '⬢', eject: '⏏' };
+    const icons = { face: '⊣', rough: '▥', finish: '◜', groove: '⊔', thread: '≋', center: '▽', drill: '↧', tap: '⇊', cutoff: '✂', rechuck: '⇤', midRechuck: '⇆', crossDrill: '⊥', flatMill: '▭', polygonMill: '⬡', cylSlot: '◍', engrave: 'Ａ', pocketMill: '◎', pickoff: '⇥', backTurn: '◺', backDrill: '↤', backTap: '⇇', backSlot: '⊖', backPolar: '⬢', eject: '⏏' };
     for (const [gid, types] of Object.entries(groups)) {
       const box = $(gid);
       for (const t of types) box.append(h('button', { class: 'rb', title: OP_TYPES[t].label, onclick: () => this.addOp(t) }, h('i', {}, icons[t] || '+'), shortLabel(t)));
@@ -518,6 +518,7 @@ export class App {
       g.append(field(P.stock, 'barDia', 'Çubuk çapı', 'mm', 'select:x', change, { items: STD_BARS.filter(b => b <= P.machine.maxBarDia).map(b => [b, 'Ø' + b]) }));
       g.append(field(P.stock, 'faceStock', 'Alın payı', 'mm', 'num', change));
       g.append(field(P.stock, 'maxRpm', 'G50 devir limiti', 'dev/dak', 'int', change));
+      g.append(field(P.stock, 'segment', 'Kılavuz burç segment boyu (0 = kapalı)', 'mm', 'num', change));
       body.append(g);
       const cut = P.tools.find(t => t.type === 'cutoff');
       body.append(h('div', { class: 'kv' },
@@ -833,7 +834,7 @@ export class App {
 
 // ------------------------------------------------------------ yardımcılar
 function shortLabel(t) {
-  return { face: 'Alın', rough: 'Kaba', finish: 'İnce', groove: 'Kanal', thread: 'Diş', center: 'Punta', drill: 'Delme', tap: 'Kılavuz', cutoff: 'Kesme', rechuck: 'Çubuk', crossDrill: 'Ç.Delme', flatMill: 'Düzlük', pocketMill: 'Cep G19', polygonMill: 'Çokgen', cylSlot: 'Kanal G7.1', engrave: 'Yazı', pickoff: 'Al', backTurn: 'A.Torna', backDrill: 'A.Delme', backTap: 'A.Kılavuz', backSlot: 'A.Kanal', backPolar: 'A.G12.1', eject: 'Atma' }[t] || t;
+  return { face: 'Alın', rough: 'Kaba', finish: 'İnce', groove: 'Kanal', thread: 'Diş', center: 'Punta', drill: 'Delme', tap: 'Kılavuz', cutoff: 'Kesme', rechuck: 'Çubuk', midRechuck: 'Ara Bağ.', crossDrill: 'Ç.Delme', flatMill: 'Düzlük', pocketMill: 'Cep G19', polygonMill: 'Çokgen', cylSlot: 'Kanal G7.1', engrave: 'Yazı', pickoff: 'Al', backTurn: 'A.Torna', backDrill: 'A.Delme', backTap: 'A.Kılavuz', backSlot: 'A.Kanal', backPolar: 'A.G12.1', eject: 'Atma' }[t] || t;
 }
 function kindLabel(k) { return { rapid: 'G0', feed: 'G1', arc: 'G2/G3', thread: 'DİŞ', dwell: 'G4', wait: 'BEKLE', event: 'M' }[k] || ''; }
 function fmtTime(s) { const m = Math.floor(s / 60); return `${m}:${String(Math.floor(s % 60)).padStart(2, '0')}.${String(Math.floor((s % 1) * 10))}`; }

@@ -63,7 +63,7 @@ export function buildPathLines(sim, L, lineInfo = []) {
 function pt(m, t, ch, L) {
   const p = movePoint(m, t);
   if (ch === 1) {
-    const dz = m.mFrom.Z - m.from.Z; // sıfır kaydırması
+    const dz = m.mFrom.Z - m.from.Z - (m.state.extZ || 0); // sıfır kaydırması (iş kaydırması hariç: yol parça çerçevesinde)
     return [-(p.Z + dz), p.X / 2, p.Y || 0];
   }
   return [p.Z - L, 0, p.X / 2];

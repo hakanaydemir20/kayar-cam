@@ -19,7 +19,7 @@ export function makeFrames({ L, grip, zShift = 0 }) {
     toMachine(ch, pos, st) {
       if (ch === 1) {
         const g = gangTool(st.tool);
-        return { X: pos.X - 2 * (g ? g.xPos || 0 : 0), Y: pos.Y - (g ? g.yPos : 0), Z: pos.Z + zShift, C: pos.C };
+        return { X: pos.X - 2 * (g ? g.xPos || 0 : 0), Y: pos.Y - (g ? g.yPos : 0), Z: pos.Z + zShift + (st.extZ || 0), C: pos.C };
       }
       if (st.wo === 'G55') {
         const lat = LAYOUT.backLat + (st.tool ? st.tool.yPos : 0);
@@ -30,7 +30,7 @@ export function makeFrames({ L, grip, zShift = 0 }) {
     fromMachine(ch, m, st) {
       if (ch === 1) {
         const g = gangTool(st.tool);
-        return { X: m.X + 2 * (g ? g.xPos || 0 : 0), Y: m.Y + (g ? g.yPos : 0), Z: m.Z - zShift, C: m.C };
+        return { X: m.X + 2 * (g ? g.xPos || 0 : 0), Y: m.Y + (g ? g.yPos : 0), Z: m.Z - zShift - (st.extZ || 0), C: m.C };
       }
       if (st.wo === 'G55') {
         const lat = LAYOUT.backLat + (st.tool ? st.tool.yPos : 0);

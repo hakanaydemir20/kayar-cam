@@ -49,6 +49,7 @@ export function interpret(text, ctx) {
       tool: null, toolCode: null, cAxis: false, subCAxis: false, coolant: false,
       g92Start: null,
       cylR: 0,          // G7.1 silindirik interpolasyon yarıçapı (0 = kapalı)
+      extZ: 0,          // G10 P0 Z iş kaydırması ($1): makine Z = program Z + extZ
       polar: false,     // G12.1 polar interpolasyon
       hyp: null,        // polar modda hipotetik konum {x, y} (mm)
     };
@@ -75,7 +76,7 @@ export function interpret(text, ctx) {
     const snapshot = () => ({
       tool: S.tool, toolCode: S.toolCode, wo: S.wo, plane: S.plane,
       main: { ...S.spindle.main }, sub: { ...S.spindle.sub }, live: { ...S.spindle.live }, backLive: { ...S.spindle.backLive },
-      coolant: S.coolant, cAxis: S.cAxis, subCAxis: S.subCAxis, cylR: S.cylR, polar: S.polar,
+      coolant: S.coolant, cAxis: S.cAxis, subCAxis: S.subCAxis, cylR: S.cylR, polar: S.polar, extZ: S.extZ,
     });
     const rapidTime = (pa, pb) => {
       const a = toM(pa), b = toM(pb);
@@ -83,7 +84,7 @@ export function interpret(text, ctx) {
       const c = Math.abs(b.C - a.C) / 360 * 0.15; // C indeksleme ~0.15 s/tur
       return Math.max(d / machine.rapid * 60, c) + 0.02;
     };
-    const toM = (pos) => frames.toMachine(ch, pos, { tool: S.tool, wo: S.wo });
+    const toM = (pos) => frames.toMachine(ch, pos, { tool: S.tool, wo: S.wo, extZ: S.extZ });
     const pushMove = (m) => { moves.push({ ...m, path: ch, state: snapshot(), mFrom: toM(m.from), mTo: toM(m.to) }); };
     const checkLimits = (li, ppos) => {
       const ax = machine.axes;
@@ -127,7 +128,18 @@ export function interpret(text, ctx) {
           else if (t.channel !== ch) err(li, `${t.name} ${ch}. kanalda kullanılamaz (takım ${t.channel}. kanalda)`);
           S.tool = t || null; S.toolCode = wd.raw;
         }
-        S.pos = frames.fromMachine(ch, mach, { tool: S.tool, wo: S.wo });
+        S.pos = frames.fromMachine(ch, mach, { tool: S.tool, wo: S.wo, extZ: S.extZ });
+      }
+      // G10 P0 Z: iş kaydırması (makine yerinde kalır, program koordinatı değişir)
+      if (w.some(wd => wd.a === 'G' && wd.v === 10)) {
+        const pw = w.find(wd => wd.a === 'P'), zw = w.find(wd => wd.a === 'Z');
+        if (!pw || pw.v !== 0 || !zw) { err(li, 'G10 yalnız "G10 P0 Z…" (iş kaydırması) olarak desteklenir'); return; }
+        if (ch !== 1) { err(li, 'İş kaydırması yalnız $1'); return; }
+        const mach = toM(S.pos);
+        S.extZ = zw.v;
+        S.pos = frames.fromMachine(ch, mach, { tool: S.tool, wo: S.wo, extZ: S.extZ });
+        pushMove({ kind: 'event', line: li, event: 'workShift', from: { ...S.pos }, to: { ...S.pos }, dur: 0.05 });
+        return;
       }
       const target = { ...S.pos };
       let hasAxis = false, motion = null, arcC = {}, dwell = null;

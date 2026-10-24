@@ -200,6 +200,11 @@ function postPath(prog, P, meta, pi) {
         break;
       }
       case 'wait': emit(waitCode(P, it.n) + ' (BEKLE ' + it.n + ')'); break;
+      case 'shift': {
+        emit((P.workShift || 'G10 P0 Z{z}').replace('{z}', fmt(it.z, dec)));
+        delete st.pos.Z; delete intent.Z; // program Z'nin anlamı değişti
+        break;
+      }
       case 'cyl': {
         const tpl = it.r > 0 ? (P.cylOn || 'G7.1 C{r}') : (P.cylOff || 'G7.1 C0.');
         emit(tpl.replace('{r}', fmt(it.r, dec)));
