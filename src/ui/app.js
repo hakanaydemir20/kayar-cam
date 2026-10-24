@@ -259,10 +259,10 @@ export class App {
     const P = () => this.project;
     const groups = {
       rbTurn: ['face', 'rough', 'finish', 'groove', 'thread', 'center', 'drill', 'tap', 'cutoff', 'rechuck'],
-      rbMill: ['crossDrill', 'flatMill', 'polygonMill', 'cylSlot', 'pocketMill'],
+      rbMill: ['crossDrill', 'flatMill', 'polygonMill', 'cylSlot', 'engrave', 'pocketMill'],
       rbSub: ['pickoff', 'backTurn', 'backDrill', 'backTap', 'backSlot', 'backPolar', 'eject'],
     };
-    const icons = { face: '⊣', rough: '▥', finish: '◜', groove: '⊔', thread: '≋', center: '▽', drill: '↧', tap: '⇊', cutoff: '✂', rechuck: '⇤', crossDrill: '⊥', flatMill: '▭', polygonMill: '⬡', cylSlot: '◍', pocketMill: '◎', pickoff: '⇥', backTurn: '◺', backDrill: '↤', backTap: '⇇', backSlot: '⊖', backPolar: '⬢', eject: '⏏' };
+    const icons = { face: '⊣', rough: '▥', finish: '◜', groove: '⊔', thread: '≋', center: '▽', drill: '↧', tap: '⇊', cutoff: '✂', rechuck: '⇤', crossDrill: '⊥', flatMill: '▭', polygonMill: '⬡', cylSlot: '◍', engrave: 'Ａ', pocketMill: '◎', pickoff: '⇥', backTurn: '◺', backDrill: '↤', backTap: '⇇', backSlot: '⊖', backPolar: '⬢', eject: '⏏' };
     for (const [gid, types] of Object.entries(groups)) {
       const box = $(gid);
       for (const t of types) box.append(h('button', { class: 'rb', title: OP_TYPES[t].label, onclick: () => this.addOp(t) }, h('i', {}, icons[t] || '+'), shortLabel(t)));
@@ -569,7 +569,7 @@ export class App {
       if (!f) return;
       head(FEATURE_LABELS[f.type], featureText(f));
       const g = h('div', { class: 'fg' });
-      for (const [k, label, unit] of FEATURE_FIELDS[f.type]) g.append(field(f, k, label, unit === 'bool' || unit.startsWith('select') ? '' : unit, unit === 'bool' ? 'bool' : unit.startsWith('select') ? unit : 'num', change));
+      for (const [k, label, unit] of FEATURE_FIELDS[f.type]) g.append(field(f, k, label, unit === 'bool' || unit === 'text' || unit.startsWith('select') ? '' : unit, unit === 'bool' || unit === 'text' ? unit : unit.startsWith('select') ? unit : unit === 'adet' ? 'int' : 'num', change, { full: unit === 'text' }));
       body.append(g);
       body.append(h('div', { class: 'btnrow' }, h('button', { class: 'btn dan', onclick: () => { P.part.features.splice(P.part.features.indexOf(f), 1); this.sel = { kind: 'part' }; change(); } }, 'Özelliği Sil')));
     } else if (s.kind === 'machine') {
@@ -596,6 +596,7 @@ export class App {
       polygon: { n: 6, af: Math.round(P.part.maxDia * 0.8 * 10) / 10, z0: L / 2 - 3, z1: L / 2 + 3, c: 0 },
       odSlot: { width: 4, depth: 0.8, z0: L / 2 - 3, c0: 0, z1: L / 2 + 3, c1: 90 },
       faceSlot: { side: 'back', width: 4, depth: 1, c: 0 },
+      engrave: { text: 'KAYAR', height: 3, depth: 0.15, z: L / 2, c: 0 },
       facePolygon: { side: 'back', n: 6, af: Math.round(P.part.maxDia * 0.6 * 10) / 10, depth: 2, c: 0 },
     };
     const f = { id, type: ft, ...defs[ft] };
@@ -832,7 +833,7 @@ export class App {
 
 // ------------------------------------------------------------ yardımcılar
 function shortLabel(t) {
-  return { face: 'Alın', rough: 'Kaba', finish: 'İnce', groove: 'Kanal', thread: 'Diş', center: 'Punta', drill: 'Delme', tap: 'Kılavuz', cutoff: 'Kesme', rechuck: 'Çubuk', crossDrill: 'Ç.Delme', flatMill: 'Düzlük', pocketMill: 'Cep G19', polygonMill: 'Çokgen', cylSlot: 'Kanal G7.1', pickoff: 'Al', backTurn: 'A.Torna', backDrill: 'A.Delme', backTap: 'A.Kılavuz', backSlot: 'A.Kanal', backPolar: 'A.G12.1', eject: 'Atma' }[t] || t;
+  return { face: 'Alın', rough: 'Kaba', finish: 'İnce', groove: 'Kanal', thread: 'Diş', center: 'Punta', drill: 'Delme', tap: 'Kılavuz', cutoff: 'Kesme', rechuck: 'Çubuk', crossDrill: 'Ç.Delme', flatMill: 'Düzlük', pocketMill: 'Cep G19', polygonMill: 'Çokgen', cylSlot: 'Kanal G7.1', engrave: 'Yazı', pickoff: 'Al', backTurn: 'A.Torna', backDrill: 'A.Delme', backTap: 'A.Kılavuz', backSlot: 'A.Kanal', backPolar: 'A.G12.1', eject: 'Atma' }[t] || t;
 }
 function kindLabel(k) { return { rapid: 'G0', feed: 'G1', arc: 'G2/G3', thread: 'DİŞ', dwell: 'G4', wait: 'BEKLE', event: 'M' }[k] || ''; }
 function fmtTime(s) { const m = Math.floor(s / 60); return `${m}:${String(Math.floor(s % 60)).padStart(2, '0')}.${String(Math.floor((s % 1) * 10))}`; }

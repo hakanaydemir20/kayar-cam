@@ -3,6 +3,7 @@ import { dilate, noseTipPath, toPolyline, sampleProfile, turnableEnvelope } from
 import { fitSegments } from '../geom/fit.js';
 import { rpmFromVc, threadDepth, round3 } from '../tools/cuttingData.js';
 import { rotaryProfile } from '../tools/toolGeom.js';
+import { textStrokes, unsupportedChars } from '../geom/strokeFont.js';
 import { SUB_NUT } from '../sim/bodies.js';
 
 const r3 = round3;
@@ -27,6 +28,7 @@ export const OP_TYPES = {
   rechuck:    { label: 'Çubuk İlerletme', channel: 1, tools: [] },
   polygonMill:{ label: 'Çokgen Frezeleme (C/Y)', channel: 1, tools: ['endmill'] },
   cylSlot:    { label: 'Silindirik Kanal (G7.1)', channel: 1, tools: ['endmill'] },
+  engrave:    { label: 'Çapa Yazı / Gravür (G7.1)', channel: 1, tools: ['endmill'] },
   backTurn:   { label: 'Arka Tornalama', channel: 2, tools: ['turn'] },
   backSlot:   { label: 'Arka Alın Kanalı (C2)', channel: 2, tools: ['endmill'] },
   backPolar:  { label: 'Arka Alın Konturu (G12.1)', channel: 2, tools: ['endmill'] },
@@ -53,6 +55,7 @@ export function defaultParams(type) {
     case 'rechuck': return {};
     case 'polygonMill': return { featureId: null, ap: 1.0, stepover: 0.6 };
     case 'cylSlot': return { featureId: null, stepDown: 0.5 };
+    case 'engrave': return { featureId: null };
     case 'backTurn': return { face: true, ap: 0.5, allowX: 0.1, allowZ: 0.05, feed: null, vc: null, roughFeed: null };
     case 'backSlot': return { featureId: null, stepDown: 0.5 };
     case 'backPolar': return { featureId: null, stepDown: 0.5, stepOver: 0.6 };
@@ -661,6 +664,43 @@ GEN.cylSlot = (prog, ctx, op, tool) => {
     atStart = !atStart;
   }
   prog.rapid({ X: xTop });
+  endLive(prog, ctx);
+};
+
+/** Yazı geometrisi (hedef model ve takım yolu ortak): her çizgi [{z, c}] — yazı C yönünde, yükseklik Z yönünde */
+export function engraveStrokes(f, R) {
+  const { strokes } = textStrokes(f.text || '', f.height);
+  const k = 180 / (Math.PI * R);
+  return strokes.map(st => st.map(p => ({ c: f.c + p.x * k, z: f.z - f.height / 2 + p.y })));
+}
+
+/** Çapa yazı: her çizgi silindirik interpolasyonla (G7.1), çizgiler arası G7.1 kapalı + hızlı konumlama */
+GEN.engrave = (prog, ctx, op, tool) => {
+  const f = featureOf(ctx, op, 'engrave');
+  const bad = unsupportedChars(f.text || '');
+  if (bad.length) throw new Error(`${op.name}: desteklenmeyen karakter: ${bad.join(' ')}`);
+  if (!(f.height > 0) || !(f.depth > 0)) throw new Error(`${op.name}: yazı yüksekliği ve derinliği girin`);
+  if (tool.dia > f.height / 2 + 1e-9) throw new Error(`${op.name}: Ø${tool.dia} takım ${f.height} mm yazı için kalın (en çok yükseklik/2)`);
+  const rt = tool.dia / 2;
+  let Rmin = Infinity, Rmax = 0;
+  for (let z = f.z - f.height / 2 - rt; z <= f.z + f.height / 2 + rt + 1e-9; z += 0.05) { const r = ctx.rAt(z); Rmin = Math.min(Rmin, r); Rmax = Math.max(Rmax, r); }
+  if (Rmax - Rmin > 0.01) throw new Error(`${op.name}: yazı bölgesi silindirik değil (Ø${r3(2 * Rmin)}…Ø${r3(2 * Rmax)})`);
+  const R = Rmax;
+  const strokes = engraveStrokes(f, R);
+  if (!strokes.length) throw new Error(`${op.name}: yazı boş`);
+  const { feed } = liveData(ctx, tool);
+  const xTop = r3(2 * (R + 0.5)), xCut = r3(2 * (R - f.depth));
+  startLive(prog, ctx, tool, r3(strokes[0][0].c));
+  goto(prog, ctx, xTop, r3(strokes[0][0].z));
+  for (const st of strokes) {
+    prog.rapid({ X: xTop });
+    prog.rapid({ Z: r3(st[0].z), C: r3(st[0].c) });
+    prog.line({ X: xCut }, Math.round(feed * 0.5));
+    prog.cyl(r3(R));
+    for (const q of st.slice(1)) prog.line({ Z: r3(q.z), C: r3(q.c) }, feed);
+    prog.cyl(0);
+    prog.rapid({ X: xTop });
+  }
   endLive(prog, ctx);
 };
 

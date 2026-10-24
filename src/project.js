@@ -56,6 +56,8 @@ export function autoOperations(p) {
   const crossMill = (dia) => p.tools.find(t => t.unit === 'cross' && t.type === 'endmill' && (dia == null || Math.abs(t.dia - dia) < 1e-6));
   for (const pg of f.filter(x => x.type === 'polygon')) ops.push(makeOp('polygonMill', (crossMill(6) || crossMill())?.id ?? null, { featureId: pg.id }, `Çokgen ${pg.n}×AA${pg.af}`));
   for (const sl of f.filter(x => x.type === 'odSlot')) ops.push(makeOp('cylSlot', crossMill(sl.width)?.id ?? null, { featureId: sl.id }, `Çap Kanalı ${sl.width} (G7.1)`));
+  const smallest = p.tools.filter(t => t.unit === 'cross' && t.type === 'endmill').sort((a, b) => a.dia - b.dia)[0];
+  for (const e of f.filter(x => x.type === 'engrave')) ops.push(makeOp('engrave', smallest?.id ?? null, { featureId: e.id }, `Yazı "${e.text}"`));
   const back = f.filter(x => x.type === 'axialHole' && x.side === 'back');
   const backMill = f.filter(x => (x.type === 'faceSlot' || x.type === 'facePolygon') && x.side === 'back');
   const needSub = back.length || backMill.length;

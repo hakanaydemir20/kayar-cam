@@ -4,6 +4,7 @@
 import { movePoint } from './interpreter.js';
 import { poseOf } from './pose.js';
 import { Collider } from './collision.js';
+import { engraveStrokes } from '../ops/generators.js';
 
 const DEG = Math.PI / 180;
 
@@ -552,6 +553,18 @@ export function buildTarget(project, opts) {
       for (let k = 0; k <= n; k++) {
         const t = k / n;
         T.applyRadial(-(f.c0 + (f.c1 - f.c0) * t) * DEG, Rl - f.depth, 0, f.z0 + (f.z1 - f.z0) * t, f.width / 2, 0);
+      }
+    } else if (f.type === 'engrave') {
+      // çapa yazı: çizgiler boyunca takım izi (programdaki gibi G7.1: Z ve C doğrusal)
+      // iz genişliği: bu özelliği işleyen gravür işleminin takım çapı
+      const op = project.ops.find(o => o.enabled && o.type === 'engrave' && o.params.featureId === f.id);
+      const tl = op && project.tools.find(t => t.id === op.toolId);
+      if (!tl) continue;
+      const Rl = profileR(prof, f.z), rt = tl.dia / 2;
+      for (const st of engraveStrokes(f, Rl)) for (let k = 1; k < st.length; k++) {
+        const a = st[k - 1], b = st[k];
+        const len = Math.hypot(b.z - a.z, (b.c - a.c) * DEG * Rl), n = Math.max(1, Math.ceil(len / 0.05));
+        for (let q = 0; q <= n; q++) { const t = q / n; T.applyRadial(-(a.c + (b.c - a.c) * t) * DEG, Rl - f.depth, 0, a.z + (b.z - a.z) * t, rt, 0); }
       }
     } else if (f.type === 'faceSlot' && f.side === 'back') {
       // arka alın kanalı: X2 doğrultusunda merkezden geçen kanal (C2 = c)

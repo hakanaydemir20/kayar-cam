@@ -264,11 +264,31 @@ export function recognizeFeatures(model, fx, faces, profile) {
       for (let z = z0; z <= z1; z += 0.05) Rl = Math.max(Rl, Rat(z));
       if (h < Rl - 0.02 && h > 0) {
         const ang = Math.atan2(np[2], np[1]) * 180 / Math.PI;
-        feats.push({ id: id(), type: 'flat', c: round(normAng(-ang)), depth: round(Rl - h), z0: round(z0), z1: round(z1) });
+        feats.push({ id: id(), type: 'flat', c: round(normAng(-ang)), depth: round(Rl - h), z0: round(z0), z1: round(z1), _h: h });
       }
     }
   }
-  return mergeCrossHoles(feats);
+  return groupPolygons(mergeCrossHoles(feats), id);
+}
+
+/** Eşit aralıklı, aynı yükseklikte ve aynı Z aralığında n ≥ 3 düzlük → çokgen (altıgen, kare…) */
+function groupPolygons(feats, id) {
+  const flats = feats.filter(f => f.type === 'flat');
+  const used = new Set();
+  const out = feats.filter(f => f.type !== 'flat');
+  for (const f of flats) {
+    if (used.has(f)) continue;
+    const g = flats.filter(o => !used.has(o) && Math.abs(o._h - f._h) < 0.01 && Math.abs(o.z0 - f.z0) < 0.05 && Math.abs(o.z1 - f.z1) < 0.05);
+    const n = g.length;
+    const angs = g.map(o => o.c).sort((a, b) => a - b);
+    const even = n >= 3 && angs.every((a, k) => Math.abs(((angs[(k + 1) % n] - a + 360) % 360 || 360) - 360 / n) < 0.5);
+    if (even) {
+      for (const o of g) used.add(o);
+      out.push({ id: id(), type: 'polygon', n, af: round(2 * f._h), z0: round(Math.min(...g.map(o => o.z0))), z1: round(Math.max(...g.map(o => o.z1))), c: round(angs[0]) });
+    } else { used.add(f); out.push(f); }
+  }
+  for (const f of out) delete f._h;
+  return out;
 }
 
 function normAng(a) { let v = a % 360; if (v < 0) v += 360; return Math.abs(v - 360) < 1e-6 ? 0 : v; }

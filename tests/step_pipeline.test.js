@@ -11,7 +11,21 @@ const require = createRequire(import.meta.url);
 let occt;
 beforeAll(async () => { occt = await require('occt-import-js')(); }, 60000);
 
-for (const f of ['pim_x_ekseni.step', 'kanalli_mil.step', 'capraz_delikli_burc.step']) {
+describe('STEP çokgen tanıma', () => {
+  it('altıgen başlık: 6 eşit düzlük → çokgen (AA10, Z12–20)', () => {
+    const model = readStep(occt, new Uint8Array(fs.readFileSync('tests/fixtures/altigen_pim.step')));
+    const { part } = partFromModel(model);
+    const pg = part.features.filter(f => f.type === 'polygon');
+    expect(pg.length).toBe(1);
+    expect(pg[0].n).toBe(6);
+    expect(pg[0].af).toBeCloseTo(10, 2);
+    expect(pg[0].z0).toBeCloseTo(12, 1);
+    expect(pg[0].z1).toBeCloseTo(20, 1);
+    expect(part.features.filter(f => f.type === 'flat').length).toBe(0);
+  });
+});
+
+for (const f of ['pim_x_ekseni.step', 'kanalli_mil.step', 'capraz_delikli_burc.step', 'altigen_pim.step']) {
   describe('STEP → CAM → NC → Verify: ' + f, () => {
     it('hatasız, çarpışmasız, fazla kesimsiz', () => {
       const model = readStep(occt, new Uint8Array(fs.readFileSync('tests/fixtures/' + f)));
@@ -28,6 +42,7 @@ for (const f of ['pim_x_ekseni.step', 'kanalli_mil.step', 'capraz_delikli_burc.s
       console.log(f, { over: c.over, overMax: c.overMax, under: c.under, cells: c.cells, underMax: c.underMax, innerOver: c.innerOver, innerUnder: c.innerUnder });
       expect(c.over).toBe(0);
       expect(c.innerOver).toBe(0);
+      expect(c.underMax).toBeLessThan(0.05);
     });
   });
 }

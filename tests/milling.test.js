@@ -1,6 +1,6 @@
 // C/Y frezeleme (çokgen, G7.1) ve arka işlemler (arka tornalama, C2 kanal, G12.1) uçtan uca
 import { describe, it, expect } from 'vitest';
-import { newProject, runPipeline } from '../src/project.js';
+import { newProject, runPipeline, autoOperations } from '../src/project.js';
 import { makePart, profileFromTable } from '../src/part/part.js';
 import { makeOp } from '../src/ops/program.js';
 import { StockSim, buildTarget, compare } from '../src/sim/stockSim.js';
@@ -113,5 +113,35 @@ describe('arka tornalama (alın payı + geriye bakan omuz) ve G12.1 arka alın �
     q.ops = q.ops.filter(o => o.type !== 'backTurn');
     const rr = runPipeline(q);
     expect(rr.errors.some(e => /Arka Tornalama işlemi yok/.test(e.msg))).toBe(true);
+  });
+});
+
+describe('çapa yazı (gravür, G7.1)', () => {
+  const rows = [{ dia: 8, len: 6, ch: 0.3 }, { dia: 12, len: 20, ch: 0.5 }];
+  const part = makePart({ name: 'Yazı', profile: profileFromTable(rows), rows,
+    features: [{ id: 'e1', type: 'engrave', text: 'AB-12', height: 4, depth: 0.15, z: 16, c: 10 }] });
+  const p = newProject(part);
+  // küçük gravür takımı (Ø1) — çapraz ünitedeki Ø4 frezenin yerine
+  const t13 = tool(p, 13); t13.dia = 1; t13.name = 'Gravür Ø1'; t13.vc = 30; t13.fz = 0.005;
+  p.ops = autoOperations(p);
+  const { r, ss, c } = verify(p);
+  it('hatasız, çarpışmasız', () => { expect(r.errors).toEqual([]); expect(ss.collisions).toEqual([]); });
+  it('her çizgi için G7.1 aç/kapa', () => {
+    const on = (r.posted.text.match(/G7\.1 C6\./g) || []).length;
+    expect(on).toBeGreaterThanOrEqual(5);
+  });
+  it('Verify: yazı derinliği doğru, fazla kesim yok', () => {
+    console.log('yazı verify', { over: c.over, overMax: c.overMax, under: c.under, underMax: c.underMax });
+    expect(c.over).toBe(0);
+    expect(c.underMax).toBeLessThan(0.05);
+    const S = ss.stock;
+    let mn = Infinity;
+    for (let i = S.idx(14); i <= S.idx(18); i++) for (let j = 0; j < S.nth; j++) mn = Math.min(mn, S.r[i * S.nth + j]);
+    expect(mn).toBeCloseTo(6 - 0.15, 2);
+  });
+  it('desteklenmeyen karakter hata verir', () => {
+    const q = JSON.parse(JSON.stringify(p));
+    q.part.features[0].text = 'A#B';
+    expect(runPipeline(q).errors.some(e => /desteklenmeyen karakter/.test(e.msg))).toBe(true);
   });
 });
