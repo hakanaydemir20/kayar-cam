@@ -102,3 +102,37 @@ export function examplePart() {
     rows,
   });
 }
+
+/**
+ * Profil tablosu parçasını ön ↔ arka çevir (180°). Satırlar ters sıralanır, köşe pah/radyüsleri komşu satıra taşınır,
+ * özelliklerin Z'si aynalanır, C açıları ters döner. Tabloda arka uç köşesine pah yazılamadığından ön alın pahı
+ * düşer; ön alın özellikleri (alın kanalı/çokgeni yalnız arkada desteklenir) düşer. Dönüş: { part, lost: [metin] }
+ */
+export function mirrorTablePart(part) {
+  const rows = part.rows || [];
+  const n = rows.length, L = part.length, lost = [];
+  if (rows[0] && (+rows[0].ch || +rows[0].rad)) lost.push('ön alın pahı/radyüsü (yeni arka uçta tabloyla tanımlanamaz)');
+  const out = [];
+  for (let j = n - 1; j >= 0; j--) {
+    const r = rows[j], next = rows[j + 1];
+    const row = { dia: r.endDia ?? r.dia, len: r.len };
+    if (r.endDia != null) row.endDia = r.dia;
+    if (next) { if (+next.ch) row.ch = next.ch; if (+next.rad) row.rad = next.rad; }
+    out.push(row);
+  }
+  const mz = (z) => Math.round((L - z) * 1000) / 1000;
+  const mc = (c) => c == null ? c : ((360 - (+c || 0)) % 360);
+  const features = [];
+  for (const f0 of part.features) {
+    const f = { ...f0 };
+    switch (f.type) {
+      case 'axialHole': f.side = f.side === 'back' ? 'front' : 'back'; break;
+      case 'crossHole': case 'pocket': case 'engrave': f.z = mz(f.z); f.c = mc(f.c); break;
+      case 'flat': case 'thread': case 'polygon': { const a = mz(f.z1), b = mz(f.z0); f.z0 = a; f.z1 = b; if ('c' in f) f.c = mc(f.c); break; }
+      case 'odSlot': f.z0 = mz(f.z0); f.z1 = mz(f.z1); f.c0 = mc(f.c0); f.c1 = mc(f.c1); break;
+      default: lost.push(`${f.type} (ön alında desteklenmiyor)`); continue;
+    }
+    features.push(f);
+  }
+  return { part: makePart({ name: part.name, profile: profileFromTable(out), rows: out, features }), lost };
+}

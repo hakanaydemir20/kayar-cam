@@ -19,24 +19,34 @@ Kayar otomat (Swiss-type) için çevrimdışı çalışan bir CAM programıdır.
   ```
   npm install
   npm run dev        # canlı geliştirme sunucusu
-  npm test           # birim + uçtan uca testler (vitest)
+  npm test           # birim + uçtan uca testler + rastgele parça taraması (vitest)
+  FUZZ_N=200 npm test  # taramayı genişlet (varsayılan 30 + 30 parça)
   npm run test:ui    # derle + tarayıcıda arayüz testi (Playwright)
   npm run build      # dist/index.html üret
   ```
 
 ## İş akışı
 
-| Adım | Nerede | Açıklama |
-|---|---|---|
-| 1 | Şerit → **STEP Yükle** | `.stp/.step` dosyası okunur. En büyük dış silindir torna ekseni olur. Delikler, çapraz delikler, düzlükler ve çokgenler tanınır; onay penceresinden seçilir. Çokgen, eşit aralıklı ve eşit derinlikli düzlüklerden tanınır (altıgen, kare). |
-| 2 | **Bağlama / Sıfır** | Z0 varsayılan olarak ön alın merkezidir. "Arka alın" ya da sayısal kaydırma seçilebilir. "Eksen Seç" ile 3D'de silindirik bir yüze tıklanır; "Ön/Arka Çevir" parçayı 180° çevirir. |
-| 3 | Sol ağaç → **Stok** | Çubuk çapı (önerilen değer otomatik gelir), alın payı, G50 devir limiti, kılavuz burç segment boyu, çubuk boyu ve kalan uç. Çubuk başına parça, malzeme verimi ve saatte parça burada görünür. |
-| 4 | Sol ağaç → **Takımlar** | Takım no/ofset, tip, ünite, ölçü, Vc, ilerleme, yanal (Y1) ve radyal (X1) montaj konumu. "STEP Model Yükle" ile üretici 3D modeli bağlanır (yalnız görsel). |
-| 5 | Şerit → işlem düğmeleri | Aşağıdaki "İşlemler" tablosuna bakın. |
-| 6 | Sağ panel | Seçili işlemin takımı, geometrisi ve parametreleri. Boş bırakılan değerler takımdan alınır. Parça panelinde ölçülü profil çizimi vardır. |
-| 7 | Alt panel | **NC Kod:** iki kanal yan yana ve simülasyonla senkron; bir satıra tıklayınca o ana gidilir. **Senkronizasyon:** zaman çizelgesi, örtüşen çevrim, sürükle-bırak. **Hatalar** ve **Verify** sekmeleri. |
-| 8 | **NC İndir** | Hata, çarpışma ya da fazla kesim varsa veya Verify bitmediyse indirme kilitlenir. Çıktı CRLF satır sonlu `O1000.nc` dosyasıdır. |
-| 9 | **Kurulum Föyü** | Takım listesi (konum, ölçü, Vc, ilerleme, kullanıldığı işlemler, kesme süresi), işlem sırası ve süreleri, sıfır noktası, çubuk akışı, profil çizimi ve uyarılar. Yazdırılabilir veya HTML olarak indirilebilir. |
+Üstteki ray beş durağı sırayla gösterir. Her durak kendi durumunu taşır: mavi = hazır, kırmızı = sorun var (tıklayınca sorunun yerine gider), turuncu = kontrol sürüyor.
+
+| Durak | Ne yapılır |
+|---|---|
+| **1 Parça** | İlk açılışta ya da **Yeni** ile başlangıç ekranı gelir: *3D model aç* (STEP), *Ölçülerden çiz* (çap/boy/pah/radyüs satırları), *Örnek parçayla dene*, *Kayıtlı projeyi aç*. |
+| **2 Bağlama ve sıfır** | Kurulum penceresi parçayı 3D gösterir. **Torna ekseni** (STEP): otomatik ya da silindirik yüze tıklayarak. **Ön yüz**: yeşil halka ön, turuncu halka arka (kesme) tarafıdır; *Ön ve arkayı değiştir* düğmesiyle ya da modelin ucuna tıklayarak çevrilir. **Referans noktası (Z0 X0)**: ön alın merkezi (önerilen), arka alın merkezi, *modelden seç* (düz alın yüzüne ya da profil köşesine yapışır) veya ön alından mm değeri. X0 her zaman torna eksenidir. **Çubuk**: önerilen standart çap, alın payı, tanınan özelliklerin seçimi. |
+| **3 İşlemler** | Özelliklerden otomatik işlem planı kurulur. Sol paneldeki **+ İşlem ekle** gruplu menüden yeni işlem ekler; sağ panelde parametreler. Sürükle-bırak ile sıra değişir. |
+| **4 Simülasyon** | Makine modelinde oynatma, NC satırıyla senkron; Verify ve çarpışma sonuçları. |
+| **5 NC kod** | Özet (program no, satır sayısı, çevrim süresi), kontrol sonucu ve **NC kodunu indir**. Hata, çarpışma ya da fazla kesim varsa indirme kilitlidir. Kurulum föyü buradan da açılır. |
+
+**Basit / Uzman modu** (sağ üst): Basit modda şerit, ek görünüm açıları, takım listesi ve makine ayrıntıları gizlenir; Uzman modda Mastercam benzeri işlem şeridi, bütün görünüm seçenekleri ve Z0 için sayısal alan açılır. Seçim tarayıcıda hatırlanır.
+
+Ayrıntılı paneller:
+
+| Yer | Açıklama |
+|---|---|
+| Sol ağaç → **Çubuk** | Çubuk çapı, alın payı, G50 devir limiti, kılavuz burç segment boyu, çubuk boyu ve kalan uç. Çubuk başına parça, malzeme verimi ve saatte parça burada görünür. |
+| Sol ağaç → **Takımlar** | Takım no/ofset, tip, ünite, ölçü, Vc, ilerleme, yanal (Y1) ve radyal (X1) montaj konumu. "STEP Model Yükle" ile üretici 3D modeli bağlanır (yalnız görsel). |
+| Alt panel | **NC Kod:** iki kanal yan yana ve simülasyonla senkron; bir satıra tıklayınca o ana gidilir. **Senkronizasyon:** zaman çizelgesi, örtüşen çevrim, sürükle-bırak. **Hatalar** ve **Verify** sekmeleri. |
+| **Kurulum Föyü** | Takım listesi, işlem sırası ve süreleri, sıfır noktası, çubuk akışı, profil çizimi ve uyarılar. Yazdırılabilir veya HTML olarak indirilebilir. |
 
 ### İşlemler
 
@@ -63,7 +73,10 @@ Kısayollar:
   - Türkçe harfler ASCII karşılığına çevrilir.
 - **Arka tornalama:** Profil arka alından aynalanır; ön tornalamadaki uç radyüsü ve arka açı hesabı aynen kullanılır.
   - Kesme işleminde arka alın payı bırakılabilir; arka tornalama bu payı alır.
-  - Arka işlemlerin en büyük derinliği, karşı iş mili pens somunu arka takım uçlarına 1 mm'den fazla yaklaşmayacak şekilde sınırlanır.
+  - Arka tornalamada en büyük derinlik, pens somunu arka takım uçlarına 1 mm'den fazla yaklaşmayacak şekilde sınırlanır.
+  - Arka delme, kılavuz ve alın frezesinde sınır gövde geometrisinden hesaplanır: karşı iş mili (somun, burun, flanş) arka ünitedeki komşu takım ve tutuculara 0.5 mm'den fazla yaklaşmaz (çarpışma kontrolüyle aynı kural).
+- **Karşı mil pens somunu:** çıkıntı 1.5 mm ve Ø30 varsayılandır (`machine.subSpindle.nutProtrusion`, `nutDia`; tahmini). Kısa parçalarda tutma boyu otomatik kısaltılır: somun alnı kesme düzleminden en az 0.5 mm önde kalır.
+- **Diş:** G92/G76 her pasoda X'e hızlı daldığı için başlangıç noktasında uç (60°, ±3 mm) boşta olmalıdır. Önde büyük omuz varsa giriş boyu kısaltılır; sığmıyorsa ya da diş silindirin ortasından başlıyorsa açıklayıcı hata verilir (diş önüne pah, boşaltma kanalı ya da parça önü gerekir). Diş sonuna büyük omuz dayanıyorsa boşaltma kanalı istenir.
 - **Arka alın kanalı (C2):** X2 tek eksen olduğu için kanal merkezden geçer ve kanal genişliği takım çapına eşittir.
 - **Arka alın konturu (G12.1):** Polar interpolasyonda X çap, C hipotetik eksen (mm) olarak yazılır. Simülasyon bunları gerçek X2/C2 hareketine çevirir.
 - **Ön alında polar frezeleme yok:** SB-20R Type G'nin ön kovan takımları tahrikli değildir.
@@ -145,6 +158,7 @@ Kısayollar:
    - karşı iş mili ↔ ana parça
    - karşı iş milindeki parça ↔ arka ünite
 6. **Verify:** Simülasyon sonundaki stok, hedef parçayla hücre hücre karşılaştırılır. Fazla kesim kırmızı, kalan malzeme mavi gösterilir.
+7. **Rastgele parça taraması (test):** Her test çalıştırmasında rastgele profiller ve özellik karışımları (delik, çapraz/kör delik, düzlük, diş, cep, çokgen, çap kanalı, yazı, arka alın işlemleri, G83, örtüşen çevrim, segmentasyon) üretilir. Her biri için CAM hatası, çarpışma ve fazla kesim olmamalı, Verify tam olmalıdır.
 
 ## Makineden doğrulanması gerekenler (önemli)
 
@@ -175,6 +189,6 @@ src/cad       STEP okuma (OpenCascade WASM), bağlama, özellik tanıma
 src/tools     takım kütüphanesi, kesme verisi, takım geometrisi (3D model ve çarpışmada ortak)
 src/sim       G-kod yorumlayıcı, kanal senkronu, stok simülasyonu, çarpışma gövdeleri ve kontrolü, Verify
 src/view3d    3D makine, kabin, takım modelleri, stok ağı, takım yolu
-src/ui        arayüz, kurulum föyü
+src/ui        arayüz, kurulum sihirbazı (ön yüz / referans), kurulum föyü
 tests         birim ve uçtan uca testler (+ STEP örnek parçalar)
 ```

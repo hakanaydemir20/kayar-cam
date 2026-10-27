@@ -10,9 +10,10 @@ import { makeOp } from '../ops/program.js';
 import { makeTool, TOOL_TYPES, UNITS } from '../tools/toolLibrary.js';
 import { makePart, profileFromTable, STD_BARS, suggestBar, examplePart } from '../part/part.js';
 import { h, esc, OP_PARAMS, TOOL_FIELDS, FEATURE_FIELDS, FEATURE_LABELS, featureText, field } from './forms.js';
-import { importStepFile, ghostFromMesh, ghostFromProfile, refixture, loadToolModel } from './stepFlow.js';
+import { importStepFile, ghostFromMesh, ghostFromProfile, loadToolModel } from './stepFlow.js';
 import { customToolModels } from '../view3d/toolMeshes.js';
 import { setupSheetHtml, barFlow, profileSvg } from './report.js';
+import { SetupWizard } from './setupWizard.js';
 
 const $ = (id) => document.getElementById(id);
 const AUTOSAVE = 'kayarcam.project.v1';
@@ -20,16 +21,122 @@ if (typeof window !== 'undefined') window.THREE = THREE; // hata ayıklama
 
 export class App {
   constructor() {
-    this.project = this.restore() || newProject();
+    const restored = this.restore();
+    this.firstRun = !restored;
+    this.project = restored || newProject();
     this.sel = { kind: 'op', id: this.project.ops[0]?.id };
+    this.mode = (() => { try { return localStorage.getItem('kayarcam.mode') || 'simple'; } catch { return 'simple'; } })();
+    this.toolsOpen = false;
     this.t = 0; this.playing = false; this.speed = 1;
     this.viewer = new Viewer($('viewport'));
     this.viewer.view('zone');
     this.viewer.onFrame = (dt) => this.frame(dt);
     this.lastUi = 0;
     this.bindChrome();
+    this.setMode(this.mode);
     this.recalc();
+    if (this.firstRun) this.openStart();
   }
+
+  // ------------------------------------------------------------ mod ve iş akışı rayı
+  setMode(m) {
+    this.mode = m === 'expert' ? 'expert' : 'simple';
+    document.body.classList.toggle('simple', this.mode === 'simple');
+    document.body.classList.toggle('expert', this.mode === 'expert');
+    document.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === this.mode)));
+    try { localStorage.setItem('kayarcam.mode', this.mode); } catch { /* */ }
+    this.viewer?.resize();
+    if (this.result) this.renderTree();
+  }
+  renderRail() {
+    const P = this.project, r = this.result, v = this.verify;
+    const camErr = (r?.errors || []).length;
+    const simBad = v ? v.ss.collisions.length + (v.c.over ? 1 : 0) : 0;
+    const zs = P.zero?.zShift || 0;
+    const steps = [
+      { key: 'part', title: 'Parça', sub: `${P.part.name} · ${P.part.length.toFixed(1)} mm`, st: 'ok' },
+      { key: 'setup', title: 'Bağlama ve sıfır', sub: !zs ? 'Z0 ön alın' : Math.abs(zs - P.part.length) < 1e-6 ? 'Z0 arka alın' : `Z0 ön alından ${zs}`, st: 'ok' },
+      { key: 'ops', title: 'İşlemler', sub: camErr ? `${camErr} hata` : `${P.ops.filter(o => o.enabled).length} işlem`, st: camErr ? 'err' : 'ok' },
+      { key: 'sim', title: 'Simülasyon', sub: !v ? 'kontrol ediliyor…' : simBad ? `${simBad} sorun` : `${fmtTime(this.totalTime || 0)} · temiz`, st: !v ? 'busy' : simBad ? 'err' : 'ok' },
+      { key: 'nc', title: 'NC kod', sub: camErr || simBad ? 'kilitli' : !v ? 'bekliyor' : 'indirilebilir', st: camErr || simBad ? 'err' : !v ? 'busy' : 'ok' },
+    ];
+    const rail = $('rail');
+    rail.innerHTML = '';
+    steps.forEach((x, i) => rail.append(h('li', {}, h('button', { class: 'stn ' + x.st, 'data-step': x.key, onclick: () => this.goStep(x.key), title: x.title + ' — ' + x.sub },
+      h('span', { class: 'no' }, x.st === 'err' ? '!' : String(i + 1)), h('span', { class: 'tx' }, h('b', {}, x.title), h('small', {}, x.sub))))));
+  }
+  goStep(k) {
+    const tab = (b) => document.querySelector(`[data-bt="${b}"]`)?.click();
+    if (k === 'part') { this.sel = { kind: 'part' }; this.renderTree(); this.renderProps(); }
+    else if (k === 'setup') this.openSetup();
+    else if (k === 'ops') {
+      const bad = (this.result?.errors || []).find(e => e.op);
+      this.sel = { kind: 'op', id: bad?.op || this.project.ops[0]?.id }; this.renderTree(); this.renderProps();
+      if (bad) tab('msgs');
+      $('tree').querySelector('.titem.sel')?.scrollIntoView({ block: 'center' });
+    } else if (k === 'sim') {
+      tab(this.verify && (this.verify.ss.collisions.length || this.verify.c.over) ? 'msgs' : 'verify');
+      this.viewer.view('zone');
+      document.querySelectorAll('[data-view]').forEach(x => x.classList.toggle('on', x.dataset.view === 'zone'));
+      if (!this.playing) { this.seek(0); this.player('play'); }
+    } else if (k === 'nc') this.openOutput();
+  }
+
+  /** Başlangıç: yeni parça nasıl eklenecek */
+  openStart() {
+    const card = (icon, title, text, fn, pri) => h('button', { class: 'scard' + (pri ? ' pri' : ''), onclick: fn }, h('span', { class: 'si', html: icon }), h('b', {}, title), h('span', {}, text));
+    const ico = {
+      step: '<svg viewBox="0 0 32 32"><path d="M16 3 28 9.5v13L16 29 4 22.5v-13z M4 9.5 16 16l12-6.5M16 16v13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
+      table: '<svg viewBox="0 0 32 32"><path d="M3 20h5v-8h8v-4h6v4h7v8H3zM3 24h26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
+      demo: '<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="12" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M13 11l8 5-8 5z" fill="currentColor"/></svg>',
+      open: '<svg viewBox="0 0 32 32"><path d="M4 8h9l3 3h12v15H4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
+    };
+    const body = h('div', { class: 'start' },
+      h('p', { class: 'start-lead' }, 'Bir parça ekleyin. Program sizi ön yüz, referans noktası ve çubuk seçiminden geçirir, işlem planını hazırlar ve NC kodu simülasyonla doğrular.'),
+      h('div', { class: 'scards' },
+        card(ico.step, '3D model aç', 'STEP (.stp / .step) dosyası', () => { this.closeModal(); $('fileStep').click(); }, true),
+        card(ico.table, 'Ölçülerden çiz', 'Çap ve boy satırlarıyla döner parça', () => { this.closeModal(); this.newTablePart(); }),
+        card(ico.demo, 'Örnek parçayla dene', 'Hazır pim: dış çap, diş, delik, düzlük', () => { this.closeModal(); new SetupWizard(this, { kind: 'table', part: examplePart() }).open(); }),
+        card(ico.open, 'Kayıtlı projeyi aç', '.kcam proje dosyası', () => { this.closeModal(); $('fileProj').click(); })));
+    this.openModal('Yeni parça', body);
+  }
+  newTablePart() {
+    const rows = [{ dia: 8, len: 10, ch: 0.5 }, { dia: 12, len: 15, ch: 0.5 }];
+    new SetupWizard(this, { kind: 'table', part: makePart({ name: 'Yeni Parça', profile: profileFromTable(rows), rows, features: [] }) }).open();
+  }
+  async openSetup(start = 'front') {
+    const p = this.project.part;
+    if (p.source === 'step') {
+      if (!p.mesh) { this.toast('3D model yükleniyor…'); await this.reviveStep(); }
+      if (!p.mesh) { this.toast('3D model yüklenemedi — STEP dosyasını yeniden açın', 4500); return; }
+      const res = { model: p.mesh, b64: p.stepB64, name: p.name, part: p, flip: !!p.flip, axisFaceId: p.axisFaceId ?? null };
+      new SetupWizard(this, { kind: 'step', res, edit: true, start }).open();
+    } else {
+      new SetupWizard(this, { kind: 'table', part: p, edit: true, start }).open();
+    }
+  }
+  /** NC çıktısı: özet + indir */
+  openOutput() {
+    const r = this.result, v = this.verify;
+    if (!r?.posted) { this.toast('Önce programı hesaplayın'); return; }
+    const errs = r.errors.length + (v ? v.ss.collisions.length + (v.c.over ? 1 : 0) : 0);
+    const P = this.project;
+    const body = h('div', { class: 'pbody out' },
+      h('div', { class: 'wiz-facts' },
+        h('div', {}, h('span', {}, 'Program'), h('b', {}, 'O' + String(P.post.programNumber).padStart(4, '0'))),
+        h('div', {}, h('span', {}, 'Satır $1 / $2'), h('b', {}, `${r.posted.paths[0].length} / ${r.posted.paths[1]?.length || 0}`)),
+        h('div', {}, h('span', {}, 'Çevrim süresi'), h('b', {}, fmtTime(this.totalTime || 0)))),
+      !v ? h('div', { class: 'msg w' }, h('span', { class: 'k' }, '…'), 'Simülasyon kontrolü sürüyor; bitince indirme açılır.')
+        : errs ? h('div', { class: 'msg e' }, h('span', { class: 'k' }, '✗'), `${errs} sorun var, indirme kilitli. Hatalar sekmesinde her birinin nedeni yazıyor.`)
+          : h('div', { class: 'msg o' }, h('span', { class: 'k' }, '✓'), 'Hata yok, çarpışma yok, fazla kesim yok.'),
+      P.post.verified ? null : h('div', { class: 'msg w' }, h('span', { class: 'k' }, '!'), 'Post-processor makinedeki örnek programla henüz doğrulanmadı. İlk çalıştırmayı kuru (parçasız) ya da tek blok modunda yapın.'),
+      h('div', { class: 'btnrow' },
+        h('button', { class: 'btn pri big', disabled: !v || errs ? true : null, onclick: () => this.downloadNC() }, 'NC kodunu indir'),
+        h('button', { class: 'btn', onclick: () => { this.closeModal(); this.openSetupSheet(); } }, 'Kurulum föyü'),
+        errs ? h('button', { class: 'btn', onclick: () => { this.closeModal(); document.querySelector('[data-bt="msgs"]').click(); } }, 'Hataları göster') : null));
+    this.openModal('NC kod', body);
+  }
+
 
   // ------------------------------------------------------------ durum
   restore() {
@@ -81,7 +188,7 @@ export class App {
       this.stockSim.seek(this.t);
     }
     this.opTimes = this.computeOpTimes();
-    this.renderTree(); this.renderProps(); this.renderNC(); this.renderSync(); this.renderMsgs(); this.renderVerify();
+    this.renderTree(); this.renderProps(); this.renderNC(); this.renderSync(); this.renderMsgs(); this.renderVerify(); this.renderRail();
     $('postChip').className = 'chip ' + (P.post.verified ? 'ok' : 'warn');
     $('postChip').textContent = P.post.verified ? 'POST DOĞRULANDI' : 'POST DOĞRULANMADI';
     const nErr = res.errors.length;
@@ -101,7 +208,7 @@ export class App {
         const T = buildTarget(this.project, ss.opts);
         const c = compare(ss.resultStock(), T, this.project.part.length);
         this.verify = { ss, c, ms: performance.now() - t0 };
-        this.renderMsgs(); this.renderVerify(); this.applyVerifyColors();
+        this.renderMsgs(); this.renderVerify(); this.applyVerifyColors(); this.renderRail();
         const bad = this.result.errors.length + ss.collisions.length + (c.over ? 1 : 0);
         this.status(bad ? `${bad} sorun` : 'Hazır · Doğrulandı', bad ? 'err' : '');
       } catch (e) { console.error(e); this.status('Verify hatası', 'err'); }
@@ -271,7 +378,7 @@ export class App {
       rbMill: ['crossDrill', 'flatMill', 'polygonMill', 'cylSlot', 'engrave', 'pocketMill'],
       rbSub: ['pickoff', 'backTurn', 'backDrill', 'backTap', 'backSlot', 'backPolar', 'eject'],
     };
-    const icons = { face: '⊣', rough: '▥', finish: '◜', groove: '⊔', thread: '≋', center: '▽', drill: '↧', tap: '⇊', cutoff: '✂', rechuck: '⇤', midRechuck: '⇆', crossDrill: '⊥', flatMill: '▭', polygonMill: '⬡', cylSlot: '◍', engrave: 'Ａ', pocketMill: '◎', pickoff: '⇥', backTurn: '◺', backDrill: '↤', backTap: '⇇', backSlot: '⊖', backPolar: '⬢', eject: '⏏' };
+    const icons = OP_ICONS;
     for (const [gid, types] of Object.entries(groups)) {
       const box = $(gid);
       for (const t of types) box.append(h('button', { class: 'rb', title: OP_TYPES[t].label, onclick: () => this.addOp(t) }, h('i', {}, icons[t] || '+'), shortLabel(t)));
@@ -293,6 +400,8 @@ export class App {
       document.querySelectorAll('.bpane').forEach(x => x.classList.toggle('active', x.id === 'pane-' + b.dataset.bt));
     }));
     $('mclose').addEventListener('click', () => this.closeModal());
+    $('modal').addEventListener('mousedown', (e) => { if (e.target === $('modal')) this.closeModal(); });
+    document.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => this.setMode(b.dataset.mode)));
     $('fileStep').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) this.loadStep(f); });
     $('fileProj').addEventListener('change', async (e) => {
       const f = e.target.files[0]; e.target.value = '';
@@ -301,15 +410,14 @@ export class App {
       catch (err) { this.toast('Proje açılamadı: ' + err.message, 5000); }
     });
     window.addEventListener('keydown', (e) => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+      if (e.code === 'Escape' && $('modal').classList.contains('on')) { this.closeModal(); return; }
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || $('modal').classList.contains('on')) return;
       if (e.code === 'Space') { e.preventDefault(); this.player('play'); }
       if (e.code === 'ArrowRight') this.player('fwd');
       if (e.code === 'ArrowLeft') this.player('back');
       if (e.code === 'KeyT') { const o = $('optPath'); o.value = o.value === 'none' ? 'all' : 'none'; this.applyOptions(); this.saveViewOpts(); }
       if (e.code === 'KeyE') { const o = $('optAxes'); o.checked = !o.checked; this.applyOptions(); this.saveViewOpts(); }
     });
-    // görünümde yüz seçimi (bağlama modu)
-    this.viewer.renderer.domElement.addEventListener('click', (e) => this.pick(e));
     if (this._pendingStep) this.reviveStep().then(() => this.recalc(true));
     else this.reviveToolModels().then(n => { if (n) this.recalc(true); });
   }
@@ -334,11 +442,11 @@ export class App {
 
   action(a) {
     switch (a) {
-      case 'new': if (confirm('Yeni proje açılsın mı? Kaydedilmemiş değişiklikler kaybolur.')) { this.project = newProject(examplePart()); this.sel = { kind: 'stock' }; this.recalc(); } break;
+      case 'new': this.openStart(); break;
       case 'open': $('fileProj').click(); break;
       case 'save': download((this.project.name || 'proje') + '.kcam', saveProject(this.project), 'application/json'); this.toast('Proje kaydedildi'); break;
       case 'step': $('fileStep').click(); break;
-      case 'fixture': this.sel = { kind: 'zero' }; this.renderProps(); this.renderTree(); break;
+      case 'fixture': this.openSetup(); break;
       case 'profile': this.sel = { kind: 'part' }; this.renderProps(); this.renderTree(); break;
       case 'auto':
         if (!confirm('Mevcut işlem listesi silinip özelliklere göre otomatik plan oluşturulsun mu?')) return;
@@ -402,17 +510,23 @@ export class App {
         opts.check || null, h('span', { class: 'ic' }, icon), h('span', { class: 'nm' }, name), extra ? h('span', { class: 'tm', html: extra }) : null, opts.tail || null);
       return el;
     };
-    tree.append(h('div', { class: 'tsec' }, 'Makine Grubu'));
-    tree.append(item('machine', null, '⚙', P.machine.name));
-    tree.append(item('stock', null, '▮', `Stok Ø${P.stock.barDia} çubuk`));
-    tree.append(item('zero', null, '⊕', `Sıfır: ${P.zero?.label || 'Ön alın'}${P.zero?.zShift ? ' (Z' + P.zero.zShift + ')' : ''}`));
+    const expert = this.mode === 'expert';
+    tree.append(h('div', { class: 'tsec' }, 'Parça ve bağlama'));
     tree.append(item('part', null, '⬢', `${P.part.name} · L${P.part.length.toFixed(2)}`));
     for (const f of P.part.features) tree.append(item('feature', f.id, '·', `${FEATURE_LABELS[f.type]} ${featureText(f)}`));
-    tree.append(h('div', { class: 'tsec' }, `Takımlar (${P.tools.length})`));
-    for (const t of [...P.tools].sort((a, b) => a.num - b.num)) tree.append(item('tool', t.id, t.channel === 2 ? '②' : '①', `T${String(t.num).padStart(2, '0')} ${t.name}`, UNITS[t.unit].label));
-    tree.append(h('div', { class: 'btnrow', style: { padding: '4px 18px' } }, h('button', { class: 'btn', onclick: () => this.addTool() }, '+ Takım')));
+    tree.append(item('zero', null, '⊕', `Z0: ${P.zero?.label || 'Ön alın merkezi'}`));
+    tree.append(item('stock', null, '▮', `Çubuk Ø${P.stock.barDia}`));
+    if (expert) tree.append(item('machine', null, '⚙', P.machine.name));
+    const tl = h('button', { class: 'tsec tog', 'aria-expanded': String(this.toolsOpen || expert), onclick: () => { this.toolsOpen = !this.toolsOpen; this.renderTree(); } }, `Takımlar (${P.tools.length})`, h('i', {}, this.toolsOpen || expert ? '−' : '+'));
+    tree.append(tl);
+    if (this.toolsOpen || expert) {
+      for (const t of [...P.tools].sort((a, b) => a.num - b.num)) tree.append(item('tool', t.id, t.channel === 2 ? '②' : '①', `T${String(t.num).padStart(2, '0')} ${t.name}`, UNITS[t.unit].label));
+      tree.append(h('div', { class: 'btnrow', style: { padding: '4px 18px' } }, h('button', { class: 'btn', onclick: () => this.addTool() }, '+ Takım')));
+    }
+    tree.append(h('div', { class: 'tadd' }, h('button', { class: 'btn pri', onclick: (e) => this.openOpMenu(e.currentTarget) }, '+ İşlem ekle'),
+      h('button', { class: 'btn ghost', title: 'İşlem listesini özelliklere göre yeniden oluştur', onclick: () => this.action('auto') }, 'Otomatik plan')));
     for (const ch of [1, 2]) {
-      tree.append(h('div', { class: 'tsec' }, ch === 1 ? '$1 İşlemler — Ana İş Mili' : '$2 İşlemler — Karşı İş Mili'));
+      tree.append(h('div', { class: 'tsec' }, ch === 1 ? 'Ana iş mili ($1)' : 'Karşı iş mili ($2)'));
       P.ops.forEach((op, i) => {
         if (OP_TYPES[op.type].channel !== ch) return;
         const ot = this.opTimes?.[op.id];
@@ -437,6 +551,31 @@ export class App {
         tree.append(el);
       });
     }
+  }
+
+  /** İşlem ekleme menüsü: gruplu, tam adlarla (uzman modunda şerit de var) */
+  openOpMenu(anchor) {
+    document.querySelector('.opmenu')?.remove();
+    const groups = [
+      ['Tornalama', ['face', 'rough', 'finish', 'groove', 'thread', 'cutoff']],
+      ['Delme', ['center', 'drill', 'tap', 'crossDrill']],
+      ['Frezeleme (C/Y)', ['flatMill', 'polygonMill', 'pocketMill', 'cylSlot', 'engrave']],
+      ['Karşı iş mili', ['pickoff', 'backTurn', 'backDrill', 'backTap', 'backSlot', 'backPolar', 'eject']],
+      ['Çubuk', ['rechuck', 'midRechuck']],
+    ];
+    const m = h('div', { class: 'opmenu', role: 'menu' });
+    for (const [g, types] of groups) {
+      m.append(h('div', { class: 'og' }, g));
+      for (const t of types) m.append(h('button', { role: 'menuitem', onclick: () => { m.remove(); this.addOp(t); } }, h('i', {}, OP_ICONS[t] || '+'), OP_TYPES[t].label));
+    }
+    document.body.append(m);
+    const r = anchor.getBoundingClientRect();
+    m.style.left = r.left + 'px';
+    m.style.top = Math.min(r.bottom + 4, window.innerHeight - m.offsetHeight - 8) + 'px';
+    m.querySelector('button')?.focus();
+    const off = (e) => { if (!m.contains(e.target) && e.target !== anchor) { m.remove(); document.removeEventListener('mousedown', off); } };
+    setTimeout(() => document.addEventListener('mousedown', off), 0);
+    m.addEventListener('keydown', (e) => { if (e.key === 'Escape') { m.remove(); anchor.focus(); } });
   }
 
   addTool() {
@@ -551,24 +690,23 @@ export class App {
         h('span', {}, 'Parça başı çubuk'), h('span', {}, (P.part.length + (cut ? cut.width : 2) + P.stock.faceStock).toFixed(2) + ' mm')));
       if (P.part.maxDia > P.stock.barDia + 1e-6) body.append(h('div', { class: 'msg e' }, h('span', { class: 'k' }, '✗'), 'Parça çapı çubuk çapından büyük!'));
     } else if (s.kind === 'zero') {
-      head('Bağlama ve Sıfır Noktası', 'Work Zero');
+      head('Bağlama ve referans noktası', 'Z0 X0');
       if (!P.zero) P.zero = { zShift: 0, label: 'Ön alın merkezi' };
-      body.append(h('div', { class: 'hint' }, 'Torna ekseni parça eksenine bağlanır. X0 her zaman eksen merkezidir. Z0 varsayılan olarak parça ön alnıdır (Star alışkanlığı). Farklı bir yüze almak için kaydırma girin.'));
-      const g = h('div', { class: 'fg' });
-      g.append(field(P.zero, 'zShift', 'Z0 kaydırma (ön alından)', 'mm', 'num', () => { P.zero.label = P.zero.zShift ? 'Kaydırılmış' : 'Ön alın merkezi'; change(); }));
-      body.append(g);
-      body.append(h('div', { class: 'btnrow' },
-        h('button', { class: 'btn', onclick: () => { P.zero = { zShift: 0, label: 'Ön alın merkezi' }; change(); } }, 'Ön alın merkezi'),
-        h('button', { class: 'btn', onclick: () => { P.zero = { zShift: P.part.length, label: 'Arka alın (kesme yüzü)' }; change(); } }, 'Arka alın')));
-      if (P.part.source === 'step') {
-        body.append(h('div', { class: 'tsec', style: { padding: '8px 0 2px' } }, 'STEP Bağlama'));
-        body.append(h('div', { class: 'hint' }, 'Torna eksenini değiştirmek için "Eksen Seç" düğmesine basıp 3D görünümde hedef modelin silindirik bir yüzüne tıklayın.'));
-        body.append(h('div', { class: 'btnrow' },
-          h('button', { class: 'btn pri', onclick: () => { this.pickMode = 'axis'; this.toast('3D görünümde silindirik bir yüze tıklayın'); } }, 'Eksen Seç (yüze tıkla)'),
-          h('button', { class: 'btn', onclick: () => this.flipPart() }, 'Ön/Arka Çevir (180°)')));
+      body.append(h('div', { class: 'kv' },
+        h('span', {}, 'Ön yüz'), h('span', {}, P.part.source === 'step' ? (P.part.flip ? 'modelin diğer ucu (çevrildi)' : 'modelin otomatik ön ucu') : 'tablonun ilk satırı'),
+        h('span', {}, 'Torna ekseni'), h('span', {}, P.part.source === 'step' ? (P.part.axisFaceId != null ? 'seçilen silindir yüzü' : 'en büyük dış silindir') : 'profil ekseni'),
+        h('span', {}, 'Referans (Z0)'), h('span', {}, P.zero.label || 'Ön alın merkezi'),
+        h('span', {}, 'X0'), h('span', {}, 'torna ekseni')));
+      body.append(h('div', { class: 'btnrow' }, h('button', { class: 'btn pri', onclick: () => this.openSetup('front') }, 'Ön yüzü değiştir'), h('button', { class: 'btn', onclick: () => this.openSetup('zero') }, 'Referans noktasını değiştir')));
+      body.append(h('div', { class: 'hint' }, 'Kurulum penceresinde parçayı 3D görürsünüz: ön yüz yeşil, arka turuncu halkayla işaretlidir; referans noktasını listeden seçebilir ya da modelde bir yüze tıklayarak belirleyebilirsiniz.'));
+      if (this.mode === 'expert') {
+        const g = h('div', { class: 'fg' });
+        g.append(field(P.zero, 'zShift', 'Z0 (ön alından)', 'mm', 'num', () => { const z = +P.zero.zShift || 0; P.zero.label = !z ? 'Ön alın merkezi' : Math.abs(z - P.part.length) < 1e-6 ? 'Arka alın merkezi' : `Ön alından ${z} mm`; change(); }));
+        body.append(g);
       }
     } else if (s.kind === 'part') {
       head(P.part.name, P.part.source === 'step' ? 'STEP modelinden' : 'Profil tablosundan');
+      body.append(h('div', { class: 'btnrow' }, h('button', { class: 'btn pri', onclick: () => this.openStart() }, 'Yeni parça ekle'), h('button', { class: 'btn', onclick: () => this.openSetup('front') }, 'Ön yüz / referans')));
       body.append(field(P.part, 'name', 'Parça adı', '', 'text', () => { P.name = P.part.name; change(); }, { full: true }));
       body.append(h('div', { class: 'svgprev', html: profileSvg(P.part, { w: 300, h: 130 }) }));
       if (P.part.source !== 'step') {
@@ -755,46 +893,12 @@ export class App {
     this.openModal('STEP Yükleniyor', h('div', {}, h('div', { class: 'spinner' }), h('div', { class: 'hint', style: { textAlign: 'center' } }, file.name + ' — OpenCascade ile okunuyor…')));
     try {
       const res = await importStepFile(file);
-      this.showStepResult(res);
+      this.closeModal();
+      new SetupWizard(this, { kind: 'step', res }).open();
     } catch (e) {
       console.error(e);
       this.openModal('STEP Hatası', h('div', { class: 'msg e' }, h('span', { class: 'k' }, '✗'), e.message));
     }
-  }
-  showStepResult(res) {
-    const { part } = res;
-    const bar = suggestBar(part.maxDia, this.project.machine.maxBarDia);
-    const body = h('div', { class: 'pbody' });
-    body.append(h('div', { class: 'kv' },
-      h('span', {}, 'Model'), h('span', {}, part.name),
-      h('span', {}, 'Parça boyu'), h('span', {}, part.length.toFixed(3) + ' mm'),
-      h('span', {}, 'En büyük çap'), h('span', {}, 'Ø' + part.maxDia.toFixed(3)),
-      h('span', {}, 'Önerilen çubuk'), h('span', {}, bar ? 'Ø' + bar : 'MAKİNE KAPASİTESİ (Ø20) AŞILDI'),
-      h('span', {}, 'Torna ekseni'), h('span', {}, 'En büyük dış silindir (otomatik)'),
-      h('span', {}, 'Sıfır noktası'), h('span', {}, 'Ön alın merkezi (Z0 X0)')));
-    body.append(h('div', { class: 'tsec', style: { padding: '8px 0 2px' } }, `Tanınan özellikler (${part.features.length})`));
-    const chosen = new Set(part.features.map(f => f.id));
-    for (const f of part.features) {
-      const cb = h('input', { type: 'checkbox' }); cb.checked = true;
-      cb.addEventListener('change', () => { if (cb.checked) chosen.add(f.id); else chosen.delete(f.id); });
-      body.append(h('label', { class: 'feat' }, cb, h('b', {}, FEATURE_LABELS[f.type]), featureText(f)));
-    }
-    body.append(h('div', { class: 'hint' }, 'Kanallar ve profil otomatik olarak döner profilden işlenir. Diş, STEP’te modellenmediği için Parça panelinden eklenmelidir.'));
-    body.append(h('div', { class: 'btnrow' },
-      h('button', { class: 'btn', onclick: () => { this.closeModal(); this.showStepResult(refixture(res, { flip: !res.flip })); } }, 'Ön/Arka Çevir'),
-      h('button', { class: 'btn pri', onclick: () => {
-        part.features = part.features.filter(f => chosen.has(f.id));
-        const P = newProject(part);
-        if (bar) P.stock.barDia = bar;
-        P.part.stepB64 = res.b64;
-        this.project = P;
-        this.sel = { kind: 'zero' };
-        this.closeModal();
-        this.recalc();
-        this.toast('STEP parça bağlandı, otomatik işlem planı oluşturuldu');
-      } }, 'Onayla ve İşlem Planı Oluştur')));
-    this.openModal('STEP Parça — Bağlama ve Özellik Tanıma', body);
-    this._stepRes = res;
   }
   async reviveToolModels() {
     const list = this.project.tools.filter(t => t.model && t.model.b64 && !customToolModels.has(t.id));
@@ -812,35 +916,6 @@ export class App {
       p.mesh = res.part.mesh; p.fixture = res.part.fixture;
     } catch (e) { console.warn('STEP yeniden yüklenemedi', e); }
   }
-  async flipPart() {
-    const p = this.project.part;
-    if (p.source !== 'step' || !p.stepB64) return;
-    const res = await importStepFile(null, p.stepB64, { flip: !p.flip, axisFaceId: p.axisFaceId });
-    this.applyRefixture(res);
-  }
-  applyRefixture(res) {
-    const P = this.project, old = P.part;
-    res.part.stepB64 = old.stepB64;
-    res.part.name = old.name;
-    const np = newProject(res.part);
-    np.stock = P.stock; np.tools = P.tools; np.post = P.post; np.machine = P.machine; np.zero = P.zero;
-    this.project = np;
-    this.recalc();
-    this.toast('Bağlama güncellendi, işlem planı yeniden oluşturuldu');
-  }
-  pick(e) {
-    if (this.pickMode !== 'axis' || !this.ghost || !this.project.part.mesh) return;
-    const rect = this.viewer.renderer.domElement.getBoundingClientRect();
-    const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
-    const rc = new THREE.Raycaster();
-    rc.setFromCamera(ndc, this.viewer.camera);
-    const hit = rc.intersectObject(this.ghost, true)[0];
-    if (!hit) { this.toast('Model yüzeyine tıklayın'); return; }
-    const fid = this.project.part.mesh.faceOf[hit.faceIndex];
-    this.pickMode = null;
-    importStepFile(null, this.project.part.stepB64, { axisFaceId: fid }).then(res => this.applyRefixture(res)).catch(err => this.toast(err.message, 5000));
-  }
-
   // ------------------------------------------------------------ post ayarları
   openPostConfig() {
     const P = this.project, post = P.post;
@@ -898,15 +973,23 @@ export class App {
     this.openModal('Kurulum Föyü — ' + this.project.part.name, body);
   }
 
-  openModal(title, content) {
+  openModal(title, content, opts = {}) {
+    if (this._onClose) { const f = this._onClose; this._onClose = null; f(); }
     $('mtitle').textContent = title;
     const b = $('mbody'); b.innerHTML = ''; b.append(content);
+    $('modal').querySelector('.mbox').classList.toggle('wide', !!opts.wide);
+    this._onClose = opts.onClose || null;
     $('modal').classList.add('on');
+    setTimeout(() => (b.querySelector('.btn.pri:not([disabled])') || b.querySelector('button'))?.focus({ preventScroll: true }), 30);
   }
-  closeModal() { $('modal').classList.remove('on'); }
+  closeModal() {
+    $('modal').classList.remove('on');
+    if (this._onClose) { const f = this._onClose; this._onClose = null; f(); }
+  }
 }
 
 // ------------------------------------------------------------ yardımcılar
+const OP_ICONS = { face: '⊣', rough: '▥', finish: '◜', groove: '⊔', thread: '≋', center: '▽', drill: '↧', tap: '⇊', cutoff: '✂', rechuck: '⇤', midRechuck: '⇆', crossDrill: '⊥', flatMill: '▭', polygonMill: '⬡', cylSlot: '◍', engrave: 'Ａ', pocketMill: '◎', pickoff: '⇥', backTurn: '◺', backDrill: '↤', backTap: '⇇', backSlot: '⊖', backPolar: '⬢', eject: '⏏' };
 function shortLabel(t) {
   return { face: 'Alın', rough: 'Kaba', finish: 'İnce', groove: 'Kanal', thread: 'Diş', center: 'Punta', drill: 'Delme', tap: 'Kılavuz', cutoff: 'Kesme', rechuck: 'Çubuk', midRechuck: 'Ara Bağ.', crossDrill: 'Ç.Delme', flatMill: 'Düzlük', pocketMill: 'Cep G19', polygonMill: 'Çokgen', cylSlot: 'Kanal G7.1', engrave: 'Yazı', pickoff: 'Al', backTurn: 'A.Torna', backDrill: 'A.Delme', backTap: 'A.Kılavuz', backSlot: 'A.Kanal', backPolar: 'A.G12.1', eject: 'Atma' }[t] || t;
 }

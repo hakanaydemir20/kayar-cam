@@ -8,15 +8,15 @@
 <body>
 <div class="shell" id="app">
   <header class="topbar">
-    <div class="brand"><div class="logo">K</div><div class="title">KAYAR <b>CAM</b></div></div>
-    <div class="tb-sep"></div>
-    <div class="chip" id="machineChip">Star SB-20R Type G · FANUC 0i-TF</div>
-    <div class="chip warn" id="postChip" title="M kodları makinedeki örnek programla doğrulanmadı">POST DOĞRULANMADI</div>
+    <div class="brand"><div class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 12h13M16 7l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="title"><span>Kayar <b>CAM</b></span><small>Star SB-20R G · FANUC 0i-TF</small></div></div>
+    <ol class="rail" id="rail" aria-label="İş akışı"></ol>
     <div class="tb-right">
-      <button class="tb" data-act="new">Yeni</button>
-      <button class="tb" data-act="open">Aç</button>
-      <button class="tb" data-act="save">Kaydet</button>
-      <div class="status"><span class="dot" id="statusDot"></span><span id="statusTxt">Hazır</span></div>
+      <button class="tb" data-act="new" title="Yeni parça">Yeni</button>
+      <button class="tb" data-act="open" title="Kayıtlı projeyi aç">Aç</button>
+      <button class="tb" data-act="save" title="Projeyi dosyaya kaydet">Kaydet</button>
+      <div class="seg" role="group" aria-label="Arayüz modu"><button data-mode="simple">Basit</button><button data-mode="expert">Uzman</button></div>
+      <div class="chip warn" id="postChip" title="M kodları makinedeki örnek programla doğrulanmadı">POST DOĞRULANMADI</div>
+      <div class="status" role="status"><span class="dot" id="statusDot"></span><span id="statusTxt">Hazır</span></div>
     </div>
   </header>
 
@@ -61,16 +61,16 @@
     <div class="vbtns">
       <button data-view="zone">İşleme Bölgesi</button>
       <button data-view="iso">İzometrik</button>
-      <button data-view="front">Ön</button>
-      <button data-view="top">Üst</button>
-      <button data-view="sub">Karşı Mil</button>
+      <button data-view="front" class="adv">Ön</button>
+      <button data-view="top" class="adv">Üst</button>
+      <button data-view="sub" class="adv">Karşı Mil</button>
       <button data-view="machine">Makine</button>
       <span class="vsep"></span>
       <label title="Kısayol: T">Takım yolu <select id="optPath"><option value="all">Tümü</option><option value="op">Aktif işlem</option><option value="sel">Seçili işlem</option><option value="none">Gizli</option></select></label>
-      <label>Takımlar <select id="optTools"><option value="ghost">Aktif + saydam</option><option value="active">Yalnız aktif</option><option value="all">Tümü</option></select></label>
+      <label class="adv">Takımlar <select id="optTools"><option value="ghost">Aktif + saydam</option><option value="active">Yalnız aktif</option><option value="all">Tümü</option></select></label>
       <label>Kabin <select id="optCabin"><option value="full">Tam</option><option value="cut">Ön kapaklar yok</option><option value="none">Gizli</option></select></label>
       <label title="Kırmızı eksen okları ve makine koordinatları (kısayol: E)"><input type="checkbox" id="optAxes" checked> Eksenler</label>
-      <label><input type="checkbox" id="optGhost" checked> Hedef model</label>
+      <label class="adv"><input type="checkbox" id="optGhost" checked> Hedef model</label>
       <label><input type="checkbox" id="optVerify"> Verify renkleri</label>
     </div>
     <div class="legend">
@@ -79,7 +79,7 @@
       <span><i style="background:#a78bfa"></i>G2/G3 yay</span>
       <span><i style="background:#34d399"></i>Diş</span>
     </div>
-    <div class="toast" id="toast"></div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
   </main>
 
   <aside class="right" id="props"></aside>
