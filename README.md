@@ -1,5 +1,11 @@
 # Kayar CAM — Star SB-20R Type G (FANUC 0i-TF)
 
+**▶ [Programı tarayıcıda aç](https://hakanaydemir20.github.io/kayar-cam/)** — kurulum gerekmez. Programı internetsiz kullanmak için o sayfayı tarayıcıda *Farklı kaydet* ile tek dosya olarak kaydedebilirsiniz.
+
+[![Test ve yayın](https://github.com/hakanaydemir20/kayar-cam/actions/workflows/pages.yml/badge.svg)](https://github.com/hakanaydemir20/kayar-cam/actions/workflows/pages.yml)
+
+> Post-processor makinedeki örnek programla henüz doğrulanmadı. Üretilen her programı makinede önce kuru çalıştırma / tek blok modunda deneyin.
+
 Kayar otomat (Swiss-type) için çevrimdışı çalışan bir CAM programıdır. İş akışı Mastercam Torna ve ESPRIT Swiss modüllerine benzer:
 
 1. STEP parça yükleme
