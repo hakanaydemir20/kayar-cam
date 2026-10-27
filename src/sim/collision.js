@@ -6,7 +6,7 @@ import { LAYOUT } from './frames.js';
 
 const TOL = 0.05;
 
-function moved(s, dx, dy, dz) {
+export function moved(s, dx, dy, dz) {
   if (s.t === 'box') { const b = s.b; return { ...s, b: [b[0] + dx, b[1] + dx, b[2] + dy, b[3] + dy, b[4] + dz, b[5] + dz] }; }
   if (s.t === 'cyl') return { ...s, x0: s.x0 + dx, x1: s.x1 + dx, cy: s.cy + dy, cz: s.cz + dz };
   return { ...s, y0: s.y0 + dy, y1: s.y1 + dy, cx: s.cx + dx, cz: s.cz + dz };
@@ -48,6 +48,14 @@ export function intersects(a, b) {
   return rectDist(ob[0], ob[1], ob[4], ob[5], c.cx, c.cz) < c.r - TOL;
 }
 
+/** Karşı iş mili gövdesi s ile arka ünite gövdesi b çakışıyor mu. Aktif takımın eksenel (pensle eş eksenli) gövdeleri
+ *  pens deliğinden ince ise sayılmaz: o bölgede takım parçanın deliğinin içindedir (oradaki temas parça kontrolünün konusu). */
+export function subHitsBack(s, b, act) {
+  if (act && b.tool === act && b.t === 'cyl' && s.t === 'cyl' && s.bore != null &&
+      Math.hypot(b.cy - s.cy, b.cz - s.cz) < 0.05 && Math.max(b.r0, b.r1) <= s.bore) return false;
+  return intersects(s, b);
+}
+
 export class Collider {
   constructor(project, stockSim) {
     this.ss = stockSim;
@@ -55,7 +63,7 @@ export class Collider {
     this.gang = gangBodies(tools);
     this.back = backBodies(tools);
     this.bush = bushBodies();
-    this.sub = subBodies(project.stock.barDia / 2);
+    this.sub = subBodies(project.stock.barDia / 2, project.machine);
     this.barR = project.stock.barDia / 2;
     this.cache = new Map();   // ızgara → {ver, bins}
     this.found = new Map();
@@ -143,7 +151,7 @@ export class Collider {
     for (const s of sb) {
       const d = this.partHit(s, mainPart); if (d) hit(s.name, 'ana iş milindeki parça/çubuk', d);
       for (const b of this.bush) if (intersects(s, b)) hit(s.name, b.name);
-      for (const b of this.back) if (intersects(s, b)) hit(s.name, nm(b));
+      for (const b of this.back) if (subHitsBack(s, b, act2)) hit(s.name, nm(b));
     }
     // karşı iş milindeki parça ↔ arka ünite / burç
     if (subPart) {

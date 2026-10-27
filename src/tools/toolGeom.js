@@ -73,7 +73,8 @@ export function gangToolBoxes(t) {
   if (t.type === 'thread') {
     return [
       { box: [-3, 3, 0, 5.2, -1.75, 1.75], cut: true },
-      { box: [-2, 12, 5.5, 15.5, -6, 6], cut: false },
+      { box: [-2, 10, 5.5, 10, -3.5, 3.5], cut: false },                                   // uç yuvası (dar)
+      { box: [-2, 12, 10, 15.5, -6, 6], cut: false },
       { box: [0, 12, 15, 95, -6, 6], cut: false },
     ];
   }

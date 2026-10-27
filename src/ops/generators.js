@@ -4,9 +4,12 @@ import { fitSegments } from '../geom/fit.js';
 import { rpmFromVc, threadDepth, round3 } from '../tools/cuttingData.js';
 import { rotaryProfile } from '../tools/toolGeom.js';
 import { textStrokes, unsupportedChars } from '../geom/strokeFont.js';
-import { SUB_NUT } from '../sim/bodies.js';
+import { subNut, subBodies, backBodies } from '../sim/bodies.js';
+import { moved, subHitsBack } from '../sim/collision.js';
+import { LAYOUT } from '../sim/frames.js';
 
 const r3 = round3;
+const DEG = Math.PI / 180;
 
 export const OP_TYPES = {
   face:       { label: 'Alın Tornalama', channel: 1, tools: ['turn'] },
@@ -382,7 +385,7 @@ GEN.thread = (prog, ctx, op, tool) => {
   prog.feedMode('rev');
   prog.spindle({ which: 'main', dir: 'cw', rpm });
   prog.coolant(true);
-  const zStart = r3(f.z0 - Math.max(2 * f.pitch, 1.5));
+  const zStart = threadStartZ(ctx, op, f, h);
   const xStart = r3(f.dia + 2);
   goto(prog, ctx, xStart, zStart);
   if (ctx.project.post.cycles?.thread === 'g76') {
@@ -394,6 +397,37 @@ GEN.thread = (prog, ctx, op, tool) => {
   }
   prog.rapid({ X: ctx.safeX });
 };
+
+/** Diş başlangıç Z'si: normal giriş boyu z0 − max(2P, 1.5). Önde diş dibinden yüksek omuz varsa uç (60° V, ±3 mm)
+ *  ve tutucu (uçtan 5.2 mm yukarıda) omza değmeyecek kadar z0'a yaklaşılır; en az 0.5P giriş kalmalı.
+ *  Diş sonunda (z1 + 0.5'ten sonra) da V ucun yanına omuz gelmemeli (boşaltma kanalı gerekir). */
+function threadStartZ(ctx, op, f, h) {
+  const rMin = (f.dia - 2 * h) / 2, P = f.pitch, TAN60 = Math.tan(60 * DEG);
+  const zAllowed = f.z0 - 1.5 * P;                  // hedefte diş bu Z'den itibaren serbest (stockSim.buildTarget)
+  const R = f.dia / 2;
+  const ok = (zt) => {
+    // G92/G76 her pasoda X'e HIZLI dalar: başlangıç noktasında uç (60° V, ±3 mm) boşta olmalı
+    for (let z = Math.max(0, zt - 3); z <= Math.min(ctx.L, zt + 3) + 1e-9; z += 0.02) {
+      if (ctx.rAt(z) > rMin + TAN60 * Math.abs(z - zt) + 0.002) return false;
+    }
+    for (let z = Math.max(0, zt - 12); z < f.z0 - 1e-9; z += 0.02) {
+      const r = ctx.rAt(z);
+      if (z >= zAllowed && r <= R + 0.01) continue;   // diş girişi (pah vb.): hedefte kesilebilir
+      const a = zt - z;
+      const lim = a <= 0 ? rMin : a <= 3 ? rMin + TAN60 * a : rMin + 5.2;
+      if (r > lim + 0.002) return false;
+    }
+    return true;
+  };
+  const zMax = f.z0 - 0.5 * P;
+  let zt = f.z0 - Math.max(2 * P, 1.5);
+  while (zt <= zMax + 1e-9 && !ok(zt)) zt += 0.05;
+  if (zt > zMax + 1e-9) throw new Error(`${op.name}: diş girişi için boş yer yok — diş kateri her pasoda X'e hızlı dalar, başlangıç noktası boşta olmalı. Dişin önünde diş dibinden (Ø${r3(2 * rMin)}) küçük bir bölge (parça önü, pah veya boşaltma kanalı) bırakın; büyük omuz varsa diş başlangıcı omuzdan en az ${r3(3 + 0.5 * P)} mm uzakta olmalı`);
+  for (let z = f.z1 + 0.5; z <= Math.min(ctx.L, f.z1 + 3) + 1e-9; z += 0.02) {
+    if (ctx.rAt(z) > Math.max(R + 0.01, rMin + TAN60 * (z - f.z1)) + 0.002) throw new Error(`${op.name}: diş sonunda omuz var — diş ucu omza çarpar. Diş sonuna boşaltma kanalı ekleyin veya diş boyunu kısaltın (Z${r3(f.z1)})`);
+  }
+  return r3(zt);
+}
 
 function axialDrillCycle(prog, ctx, Zend, peck, F) {
   // varsayılan: açık hareketlerle gagalama (çevrim parametresine bağımlılık yok); Post ayarında G83 seçilebilir
@@ -418,7 +452,7 @@ function axialDrillCycle(prog, ctx, Zend, peck, F) {
 function drillOnSpindle(prog, ctx, op, tool, which) {
   const f = featureOf(ctx, op, 'axialHole');
   const p = op.params;
-  if (which === 'sub' && f.depth + tipLen(tool) > backMaxDepth(ctx)) throw new Error(`${op.name}: delik derinliği arka işleme sınırını (${r3(backMaxDepth(ctx))} mm) aşıyor — pens somunu arka takımlara çarpar`);
+  if (which === 'sub' && f.depth + tipLen(tool) + (f.through ? 0.5 : 0) > backAxialLimit(ctx, tool)) throw new Error(`${op.name}: delik derinliği + uç boyu arka işleme sınırını (${r3(backAxialLimit(ctx, tool))} mm) aşıyor — karşı iş mili arka ünitedeki takımlara çarpar. Tutma boyunu azaltın veya komşu istasyonu boşaltın.`);
   if (tool.type !== 'center' && tool.dia > f.dia + 1e-6) throw new Error(`${op.name}: matkap Ø${tool.dia} > delik Ø${f.dia}`);
   const limDrill = which === 'main' ? ctx.machine.stations.frontSleeve.maxDrill : ctx.machine.liveTools.back.maxDrillStatic;
   if (tool.dia > limDrill) throw new Error(`${op.name}: Ø${tool.dia} matkap makine kapasitesini (Ø${limDrill}) aşıyor`);
@@ -666,8 +700,8 @@ GEN.rechuck = (prog, ctx, op) => {
 // ---- Kanal 2 ----
 GEN.pickoff = (prog, ctx, op, tool, extra) => {
   const p = op.params;
-  const grip = Math.min(p.grip, ctx.L - 1);
-  if (grip < 2) throw new Error(`${op.name}: parça boyu karşı iş milinde tutmak için çok kısa`);
+  const grip = r3(pickGrip(p.grip, ctx.L, ctx.backStock, ctx.machine));
+  if (grip < 2) throw new Error(`${op.name}: parça boyu karşı iş milinde tutmak için çok kısa (en az ${r3(2 + subNut(ctx.machine).len + 0.5)} mm gerekir)`);
   const park = subPark(ctx);
   prog.workOffset('G54');
   prog.rapid({ X: 0 });
@@ -690,8 +724,29 @@ GEN.pickoff = (prog, ctx, op, tool, extra) => {
   op._grip = grip;
 };
 
-/** Arka işlemlerde en büyük derinlik (G55 Z): pens somunu (alından SUB_NUT çıkıntılı) arka takım uçlarına 1 mm yaklaşabilir */
-export function backMaxDepth(ctx) { return ctx.L - ctx.grip - SUB_NUT - 1; }
+/** Karşı iş milinde gerçek tutma boyu: parça boyunu ve pens somunu çıkıntısını aşmaz
+ *  (somun alnı kesme düzleminden en az 0.5 mm önde kalır — kesme bıçağına değmez). */
+export function pickGrip(gripParam, L, backStock, machine) {
+  return Math.min(+gripParam || 6, L - 1, L + (backStock || 0) - subNut(machine).len - 0.5);
+}
+
+/** Arka işlemlerde en büyük derinlik (G55 Z): pens somunu (pens alnından subNut().len çıkıntılı) arka takım uçlarına 1 mm yaklaşabilir */
+export function backMaxDepth(ctx) { return ctx.L - ctx.grip - subNut(ctx.machine).len - 1; }
+
+/** Eksenel arka işlemde (delme, kılavuz, alın frezesi) en büyük takım dalma boyu (G55 Z): karşı iş mili
+ *  (somun, burun, flanş) arka ünitedeki komşu takımlara / tutuculara 0.5 mm'den fazla yaklaşmaz.
+ *  Çarpışma kontrolüyle aynı gövdeler ve aynı kural (collision.subHitsBack). */
+export function backAxialLimit(ctx, tool) {
+  const p = ctx.L - ctx.grip;
+  const lat = LAYOUT.backLat + (tool.yPos || 0);
+  const bb = backBodies(ctx.tools), sb = subBodies(ctx.barR, ctx.machine);
+  const hits = (z) => { const face = LAYOUT.backToolX + p - z; return sb.some(s => { const m = moved(s, face, 0, lat); return bb.some(b => subHitsBack(m, b, tool)); }); };
+  if (hits(0)) return 0;
+  let lo = 0, hi = 120;
+  if (!hits(hi)) return hi;
+  while (hi - lo > 0.01) { const mid = (lo + hi) / 2; if (hits(mid)) hi = mid; else lo = mid; }
+  return Math.max(0, lo - 0.5);
+}
 
 /** Karşı iş mili bekleme konumu (G54 Z): parçanın önünde ve ön kovan takımlarının erişiminin dışında */
 export function subPark(ctx) {
@@ -700,7 +755,7 @@ export function subPark(ctx) {
   const zMax = ctx.machine.axes.Z2.max;
   const park = Math.min(zMax, Math.max(ctx.L + 40, reach + 25));
   // uzun parça: Z2 sınırında beklenir; parça önü (L + pay) pens somununa 1 mm'den fazla yaklaşmamalı
-  if (park - SUB_NUT < ctx.L + (ctx.backStock || 0) + 1) throw new Error(`Parça (${ctx.L} mm) karşı iş mili bekleme konumuna sığmıyor (Z2 en çok ${zMax})`);
+  if (park - subNut(ctx.machine).len < ctx.L + (ctx.backStock || 0) + 1) throw new Error(`Parça (${ctx.L} mm) karşı iş mili bekleme konumuna sığmıyor (Z2 en çok ${zMax})`);
   return r3(park);
 }
 
@@ -726,7 +781,8 @@ GEN.eject = (prog, ctx) => {
   prog.rapid({ Z: -5 });          // arka takımlardan uzaklaş
   prog.workOffset('G54');
   prog.rapid({ X: 0 });           // önce yanal, sonra eksenel (çapraz hareket yok)
-  prog.rapid({ Z: subPark(ctx) });
+  // parça pensteyken bekleme konumuna (ön takımların önüne) DÖNÜLMEZ: örtüşen çevrimde ana kanal o sırada ön
+  // kovan takımlarıyla çalışıyor olabilir (çarpışma kontrolü yakaladı). Parça arka ünite tarafında, uzakta atılır.
   prog.m('subChuckOpen');
   prog.m('partEject');
   prog.dwell(0.5);
@@ -937,7 +993,7 @@ GEN.backSlot = (prog, ctx, op, tool) => {
   const f = featureOf(ctx, op, 'faceSlot');
   backLiveCheck(ctx, op, tool);
   if (Math.abs(tool.dia - f.width) > 1e-6) throw new Error(`${op.name}: takım Ø${tool.dia} ≠ kanal genişliği ${f.width} (X2 tek eksen: genişlik = takım çapı)`);
-  if (f.depth > backMaxDepth(ctx)) throw new Error(`${op.name}: kanal derinliği (${f.depth}) arka işleme sınırını (${r3(backMaxDepth(ctx))}) aşıyor — pens somunu arka takımlara çarpar`);
+  if (f.depth > backAxialLimit(ctx, tool)) throw new Error(`${op.name}: kanal derinliği (${f.depth}) arka işleme sınırını (${r3(backAxialLimit(ctx, tool))}) aşıyor — karşı iş mili arka ünitedeki takımlara çarpar`);
   const Rb = ctx.rAt(ctx.L - 0.01);
   const { feed } = backLiveStart(prog, ctx, tool);
   prog.rapid({ C: r3(f.c || 0) });
@@ -975,7 +1031,7 @@ GEN.backPolar = (prog, ctx, op, tool) => {
   if (!(f.n >= 3)) throw new Error(`${op.name}: kenar sayısı en az 3 olmalı`);
   const Rb = ctx.rAt(ctx.L - 0.01);
   if (f.af / 2 >= Rb - 0.001) throw new Error(`${op.name}: anahtar ağzı çaptan küçük olmalı`);
-  if (f.depth > backMaxDepth(ctx)) throw new Error(`${op.name}: derinlik (${f.depth}) arka işleme sınırını (${r3(backMaxDepth(ctx))}) aşıyor — pens somunu arka takımlara çarpar`);
+  if (f.depth > backAxialLimit(ctx, tool)) throw new Error(`${op.name}: derinlik (${f.depth}) arka işleme sınırını (${r3(backAxialLimit(ctx, tool))}) aşıyor — karşı iş mili arka ünitedeki takımlara çarpar`);
   const rt = tool.dia / 2, p = op.params;
   const { feed } = backLiveStart(prog, ctx, tool);
   // radyal pasolar: dış stoktan kontura (son paso offset = rt)

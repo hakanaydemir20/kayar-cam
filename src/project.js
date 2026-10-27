@@ -5,7 +5,7 @@ import { defaultTools } from './tools/toolLibrary.js';
 import { examplePart, suggestBar } from './part/part.js';
 import { makeOp, buildProgram } from './ops/program.js';
 import { buildContext } from './ops/context.js';
-import { findGrooves } from './ops/generators.js';
+import { findGrooves, pickGrip } from './ops/generators.js';
 import { postProcess } from './post/fanucStar.js';
 import { interpret } from './sim/interpreter.js';
 import { makeFrames } from './sim/frames.js';
@@ -51,8 +51,16 @@ export function autoOperations(p) {
     const d = p.tools.find(t => t.unit === 'cross' && t.type === 'ldrill' && Math.abs(t.dia - c.dia) < 1e-6);
     ops.push(makeOp('crossDrill', d?.id ?? null, { featureId: c.id }, `Çapraz Delik Ø${c.dia}`));
   }
-  for (const fl of f.filter(x => x.type === 'flat')) ops.push(makeOp('flatMill', tt(p, 12), { featureId: fl.id }, 'Düzlük C' + fl.c));
-  for (const pk of f.filter(x => x.type === 'pocket')) ops.push(makeOp('pocketMill', tt(p, 13), { featureId: pk.id }, 'Cep Ø' + pk.dia));
+  for (const fl of f.filter(x => x.type === 'flat')) {
+    // düzlük boyuna sığan en büyük parmak freze (yoksa T12)
+    const fit = p.tools.filter(t => t.unit === 'cross' && t.type === 'endmill' && t.dia <= Math.abs(fl.z1 - fl.z0) + 1e-6).sort((a, b) => b.dia - a.dia)[0];
+    ops.push(makeOp('flatMill', fit?.id ?? tt(p, 12), { featureId: fl.id }, 'Düzlük C' + fl.c));
+  }
+  for (const pk of f.filter(x => x.type === 'pocket')) {
+    // cep çapından küçük en büyük parmak freze (helis için takım < cep)
+    const fit = p.tools.filter(t => t.unit === 'cross' && t.type === 'endmill' && t.dia < pk.dia - 1e-6).sort((a, b) => b.dia - a.dia)[0];
+    ops.push(makeOp('pocketMill', fit?.id ?? tt(p, 13), { featureId: pk.id }, 'Cep Ø' + pk.dia));
+  }
   const crossMill = (dia) => p.tools.find(t => t.unit === 'cross' && t.type === 'endmill' && (dia == null || Math.abs(t.dia - dia) < 1e-6));
   for (const pg of f.filter(x => x.type === 'polygon')) ops.push(makeOp('polygonMill', (crossMill(6) || crossMill())?.id ?? null, { featureId: pg.id }, `Çokgen ${pg.n}×AA${pg.af}`));
   for (const sl of f.filter(x => x.type === 'odSlot')) ops.push(makeOp('cylSlot', crossMill(sl.width)?.id ?? null, { featureId: sl.id }, `Çap Kanalı ${sl.width} (G7.1)`));
@@ -92,7 +100,8 @@ export function runPipeline(project) {
   }
   if (posted) {
     const pick = project.ops.find(o => o.type === 'pickoff' && o.enabled);
-    const grip = pick ? Math.min(pick.params.grip, project.part.length - 1) : 5;
+    const cutOp = project.ops.find(o => o.type === 'cutoff' && o.enabled);
+    const grip = pick ? Math.round(pickGrip(pick.params.grip, project.part.length, Math.max(0, +cutOp?.params.backStock || 0), project.machine) * 1000) / 1000 : 5;
     const frames = makeFrames({ L: project.part.length, grip, zShift: project.zero?.zShift || 0 });
     sim = interpret(posted.text, { profile: project.post, machine: project.machine, tools: project.tools, frames });
     sim.frames = frames;

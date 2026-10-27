@@ -100,7 +100,7 @@ export function interpret(text, ctx) {
     };
     const requireCutReady = (li) => {
       const t = S.tool;
-      if (!t && ch === 2) return; // karşı iş mili transfer hareketi (takımsız)
+      if (ch === 2 && (!t || S.wo === 'G54')) return; // karşı iş mili transfer hareketi (G54: takım kesmede değil; örtüşen çevrimde son arka takım hâlâ seçili)
       if (!t) { err(li, 'Takım çağrılmadan kesme hareketi'); return; }
       if (t.live) {
         const key = t.unit === 'back' ? 'backLive' : 'live';

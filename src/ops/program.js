@@ -1,6 +1,7 @@
 // İşlem listesinden iki kanallı programı kurar (ESPRIT tarzı otomatik senkronizasyon).
 import { Prog } from '../toolpath/ir.js';
-import { GEN, OP_TYPES, defaultParams } from './generators.js';
+import { GEN, OP_TYPES, defaultParams, pickGrip } from './generators.js';
+const r3g = (v) => Math.round(v * 1000) / 1000;
 import { buildContext } from './context.js';
 import { findTool } from '../tools/toolLibrary.js';
 import { rpmFromVc } from '../tools/cuttingData.js';
@@ -30,8 +31,8 @@ export function buildProgram(project) {
     if (t) cutRpm = Math.max(50, Math.min(project.machine.mainSpindle.maxRpm, project.machine.subSpindle.maxRpm, Math.round(cut.params.rpm || rpmFromVc(t.vc, project.stock.barDia))));
     cut.params._syncRpm = cutRpm;
   }
-  if (pick) ctx.grip = Math.min(pick.params.grip, ctx.L - 1);
   if (cut) ctx.backStock = Math.max(0, +cut.params.backStock || 0);
+  if (pick) ctx.grip = r3g(pickGrip(pick.params.grip, ctx.L, ctx.backStock, project.machine));
   // bekleme kodları programdaki sırayla dağıtılır: ara bağlamalar (her biri 3), sonra parça alma (3)
   let wn = 1;
   const mids = ops.filter(o => o.type === 'midRechuck');

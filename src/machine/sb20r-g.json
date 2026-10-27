@@ -59,7 +59,9 @@
     "powerKw": 0.55,
     "maxChuck": 20,
     "maxEject": 80,
-    "maxProjection": 30
+    "maxProjection": 30,
+    "nutProtrusion": 1.5,
+    "nutDia": 30
   },
   "liveTools": {
     "cross": {

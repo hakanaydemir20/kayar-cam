@@ -140,7 +140,8 @@ function threadTool(t) {
   ig.translate(0, 0, -1.75);
   const ins = new THREE.Mesh(ig, mat('tin'));
   g.add(ins);
-  g.add(box(14, 10, 12, 'blackOx', 5, 10.5, 0));
+  g.add(box(12, 4.5, 7, 'blackOx', 4, 7.75, 0));      // dar uç yuvası (toolGeom ile aynı)
+  g.add(box(14, 5.5, 12, 'blackOx', 5, 12.75, 0));
   g.add(box(12, 80, 12, 'blackOx', 6, 55, 0));
   return g;
 }

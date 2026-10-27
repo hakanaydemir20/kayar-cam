@@ -183,6 +183,16 @@ function bladeLower(tool, rp, zp) {
   const w = tool.width || 2;
   return { d0: zp, d1: zp + w, f: () => rp };
 }
+/** Hareketin t anındaki makine konumu. Yayda (G2/G3, her düzlem) program noktası + sabit ofset — doğrusal
+ *  ara değer yayın ortasını kaçırır (G19 helis cebinde Z değişimi kaybolurdu). Bkz. pose.js poseOf. */
+function machAt(m, t, p) {
+  if (!m.mFrom || !m.mTo) return p;
+  if (m.kind === 'arc') {
+    const a = m.mFrom, f = m.from;
+    return { X: p.X + (a.X - f.X), Y: (p.Y || 0) + ((a.Y || 0) - (f.Y || 0)), Z: p.Z + (a.Z - f.Z), C: p.C ?? a.C };
+  }
+  return lerpM(m.mFrom, m.mTo, t);
+}
 function threadLower(tool, rp, zp) {
   return { d0: zp - 1.2, d1: zp + 1.2, f: (d) => rp + Math.abs(d - zp) / Math.tan(30 * DEG) };
 }
@@ -300,11 +310,11 @@ export class StockSim {
     if (m.path === 1 && tool.unit === 'gang') {
       maxRemoved = this.gangSweep(m, tool, fa, fb, steps);
     } else {
-      let prevP = movePoint(m, fa), prevM = m.mFrom && m.mTo ? lerpM(m.mFrom, m.mTo, fa) : prevP;
+      let prevP = movePoint(m, fa), prevM = machAt(m, fa, prevP);
       for (let k = 1; k <= steps; k++) {
         const t = fa + (fb - fa) * k / steps;
         const p = movePoint(m, t);
-        const mp = m.mFrom && m.mTo ? lerpM(m.mFrom, m.mTo, t) : p;
+        const mp = machAt(m, t, p);
         const removed = this.cutAt(m, tool, p, mp, prevP, prevM);
         if (removed > maxRemoved) maxRemoved = removed;
         prevP = p; prevM = mp;
@@ -345,7 +355,7 @@ export class StockSim {
     for (let k = 0; k <= steps; k++) {
       const t = fa + (fb - fa) * k / steps;
       const p = movePoint(m, t);
-      const mp = lerpM(m.mFrom, m.mTo, t);
+      const mp = machAt(m, t, p);
       const sh = shape(tool, p.X / 2, this.mainFrontWorld(mp.Z));
       const i0 = Math.max(0, S.idx(sh.d0)), i1 = Math.min(S.nz - 1, S.idx(sh.d1));
       if (i0 > i1) continue;
@@ -515,7 +525,13 @@ export function buildTarget(project, opts) {
   for (const f of project.part.features) {
     if (f.type === 'thread') {
       const minor = f.dia / 2 - 0.6134 * f.pitch - 0.01;
-      for (let i = T.idx(f.z0 - 1.5 * f.pitch); i <= T.idx(f.z1 + 0.5); i++) if (i >= 0 && i < T.nz) T.lowAllowed[i] = minor;
+      // giriş (1.5P) ve V uçlu çıkış: yalnız diş çapını aşmayan malzeme (büyük omuz dişlenmez)
+      const runOut = (f.dia / 2 - minor) / Math.tan(60 * DEG) + 0.05;
+      for (let i = T.idx(f.z0 - 1.5 * f.pitch); i <= T.idx(f.z1 + runOut); i++) {
+        if (i < 0 || i >= T.nz) continue;
+        const d = T.dAt(i);
+        if (d >= f.z0 && d <= f.z1 || profileR(prof, d) <= f.dia / 2 + 0.01) T.lowAllowed[i] = minor;
+      }
     } else if (f.type === 'axialHole') {
       const R = f.dia / 2;
       const cone = R / Math.tan(59 * Math.PI / 180);
@@ -528,11 +544,7 @@ export function buildTarget(project, opts) {
         if (fromEnd > f.depth && fromEnd <= f.depth + cone + 0.1) T.innerFree[i] = 1;      // uç konisi
       }
     } else if (f.type === 'crossHole') {
-      const phi = -f.c * DEG;
-      const Rl = profileR(prof, f.z);
-      const h = f.through ? -Rl : f.depthDia != null ? f.depthDia / 2 : Rl - f.depth;
-      T.applyRadial(phi, h, 0, f.z, f.dia / 2, 0);
-      if (f.through) T.applyRadial(phi + Math.PI, -Rl, 0, f.z, f.dia / 2, 0);
+      crossHoleCut(T, f, prof, project);
     } else if (f.type === 'flat') {
       const phi = -f.c * DEG;
       let Rl = 0;
@@ -608,7 +620,49 @@ export function buildTarget(project, opts) {
       }
     }
   }
+  threadCrossLow(T, project, prof);
   return T;
+}
+
+/** Çapraz delik hedefi. Kör delikte derinlik (dip çapı / derinlik) matkabın tam çaplı kısmına göredir;
+ *  tahrikli matkabın uç konisi (delen işlemin takımından) dibin altına iner — programdaki gibi. */
+function crossHoleCut(G, f, prof, project) {
+  const phi = -f.c * DEG, Rl = profileR(prof, f.z), R = f.dia / 2;
+  if (f.through) { G.applyRadial(phi, -Rl, 0, f.z, R, 0); G.applyRadial(phi + Math.PI, -Rl, 0, f.z, R, 0); return; }
+  const op = project.ops.find(o => o.enabled && o.type === 'crossDrill' && o.params.featureId === f.id);
+  const tl = op && project.tools.find(t => t.id === op.toolId);
+  const slope = tl && tl.type === 'ldrill' ? 1 / Math.tan(((tl.tipAngle || 118) / 2) * DEG) : 0;
+  const hb = f.depthDia != null ? f.depthDia / 2 : Rl - f.depth;
+  // konik dip: yanal konum yarıçapa bağlı (r·sinΔ) → sabit noktaya kadar yinele (simülasyondaki kademeli dalma gibi)
+  for (let k = 0; k < (slope ? 12 : 1); k++) if (!G.applyRadial(phi, hb - R * slope, 0, f.z, R, slope)) break;
+}
+
+/** Dişli bölgeden geçen çapraz delik / cep: diş dibi yüzeyinde (alt sınır) delik ışın boyunca tümüyle boşaltabilir
+ *  (yükseklik haritası dış yüzeyi tutar). Hücre başına alt sınır: aynı radyal kesim diş dibi yüzeyine uygulanır. */
+function threadCrossLow(T, project, prof) {
+  const radial = project.part.features.filter(f => f.type === 'crossHole' || f.type === 'pocket');
+  if (!radial.length || !T.lowAllowed.some(v => !Number.isNaN(v))) return;
+  const TL = T.clone();
+  for (let i = 0; i < T.nz; i++) {
+    const low = T.lowAllowed[i];
+    if (Number.isNaN(low)) continue;
+    const o = i * T.nth;
+    for (let j = 0; j < T.nth; j++) if (TL.r[o + j] > low) TL.r[o + j] = low;
+  }
+  for (const f of radial) {
+    if (f.type === 'pocket') { TL.applyRadial(-f.c * DEG, profileR(prof, f.z) - f.depth, 0, f.z, f.dia / 2, 0); continue; }
+    crossHoleCut(TL, f, prof, project);
+  }
+  const n = T.nz * T.nth, lc = new Float32Array(n).fill(NaN);
+  for (let i = 0; i < T.nz; i++) {
+    const low = T.lowAllowed[i];
+    if (Number.isNaN(low)) continue;
+    for (let j = 0; j < T.nth; j++) {
+      const k = i * T.nth + j;
+      if (TL.r[k] < low - 1e-6) lc[k] = TL.r[k];
+    }
+  }
+  T.lowCell = lc;
 }
 
 export function profileR(pts, d) {
@@ -644,6 +698,15 @@ export function compare(stock, target, L, tolOver = 0.02, tolUnder = 0.03) {
     }
     return [mn, mx];
   };
+  const nbNaN = (arr, i, j) => {
+    let mn = Infinity;
+    for (let di = -1; di <= 1; di++) {
+      const ii = i + di;
+      if (ii < 0 || ii >= stock.nz) continue;
+      for (let dj = -1; dj <= 1; dj++) { const v = arr[ii * stock.nth + (j + dj + stock.nth) % stock.nth]; if (v < mn) mn = v; }
+    }
+    return [mn];
+  };
   for (let i = 0; i < stock.nz; i++) {
     const d = stock.dAt(i);
     if (d < 0.05 || d > L - 0.05) continue;
@@ -653,7 +716,8 @@ export function compare(stock, target, L, tolOver = 0.02, tolUnder = 0.03) {
       if (t < 0) continue;
       cells++;
       const [tmn0, tmx] = nb(target.r, i, j);
-      const low = target.lowAllowed ? target.lowAllowed[i] : NaN;
+      let low = target.lowAllowed ? target.lowAllowed[i] : NaN;
+      if (target.lowCell) { const [lmn] = nbNaN(target.lowCell, i, j); if (lmn < Infinity) low = Number.isNaN(low) ? lmn : Math.min(low, lmn); }
       const tmn = Number.isNaN(low) ? tmn0 : Math.min(tmn0, low);
       if (s < tmn - tolOver) { status[k] = 1; over++; overMax = Math.max(overMax, tmn - s); }
       else if (s > tmx + tolUnder) { status[k] = 2; under++; underMax = Math.max(underMax, s - tmx); }

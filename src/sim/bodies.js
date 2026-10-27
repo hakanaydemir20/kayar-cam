@@ -5,7 +5,13 @@ import { LAYOUT } from './frames.js';
 import { rotaryProfile, gangToolBoxes, isRotaryType } from '../tools/toolGeom.js';
 
 export const PAN_Y = -330;                   // talaş teknesi üstü
-export const SUB_NUT = 10.4;                 // karşı iş mili pens somununun alından çıkıntısı (mm)
+export const SUB_NUT = 1.5;                  // karşı iş mili pens somununun pens alnından çıkıntısı (mm, varsayılan)
+export const SUB_NUT_R = 15;                 // pens somunu yarıçapı (mm, varsayılan)
+/** Makine ayarından pens somunu ölçüleri (tahmini; Post / Makine ayarlarından düzeltilebilir) */
+export function subNut(machine) {
+  const s = machine?.subSpindle || {};
+  return { len: Number.isFinite(+s.nutProtrusion) ? Math.max(0, +s.nutProtrusion) : SUB_NUT, r: +s.nutDia > 0 ? +s.nutDia / 2 : SUB_NUT_R };
+}
 const GANG = (t) => t.unit === 'gang' || t.unit === 'cross' || t.unit === 'front';
 const box = (x0, x1, y0, y1, z0, z1, extra = {}) => ({ t: 'box', b: [x0, x1, y0, y1, z0, z1], ...extra });
 const cyl = (x0, x1, r0, r1 = r0, extra = {}) => ({ t: 'cyl', x0, x1, r0, r1, cy: 0, cz: 0, ...extra });
@@ -114,11 +120,14 @@ export function backBodies(tools) {
 }
 
 /** Karşı iş mili (yerel: x = pens alnından, z = karşı iş mili ekseninden yanal). Delik (bore): parça bu çapa kadar girer. */
-export function subBodies(barR) {
+export function subBodies(barR, machine) {
   const bore = barR + 0.3;
+  const nut = subNut(machine);
   return [
-    cyl(-SUB_NUT, 0, 18, 18, { name: 'Karşı iş mili pens somunu', mat: 'chrome', bore, collet: true }),
-    cyl(0, 26, 22, 22, { name: 'Karşı iş mili burnu', mat: 'steel', bore }),
+    cyl(-nut.len, 0, nut.r, nut.r, { name: 'Karşı iş mili pens somunu', mat: 'chrome', bore, collet: true }),
+    // ince burun: kesme sırasında komşu gang takımlarının (□12 sap, kesme düzleminden +x yönünde ~14 mm) yanından geçer
+    cyl(0, 16, nut.r, nut.r, { name: 'Karşı iş mili burnu (ince)', mat: 'steel', bore }),
+    cyl(16, 26, 22, 22, { name: 'Karşı iş mili burnu', mat: 'steel', bore }),
     cyl(26, 34, 28, 28, { name: 'Karşı iş mili flanşı', mat: 'darkSteel', bore }),
     box(34, 96, -30, 30, -32, 32, { name: 'Karşı iş mili gövdesi', mat: 'white', r: 9 }),
     box(96, 262, -58, 52, -50, 50, { name: 'Karşı iş mili gövdesi', mat: 'white', r: 14 }),

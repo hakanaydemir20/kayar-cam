@@ -22,7 +22,9 @@ export function profileFromTable(rows) {
   rows.forEach((row, idx) => {
     const r0 = row.dia / 2;
     const r1 = (row.endDia ?? row.dia) / 2;
-    const ch = +row.ch || 0, rad = +row.rad || 0;
+    // aynı çaplı iki satırın birleşiminde köşe yok: pah/radyüs yok sayılır (yoksa sahte V-kanal oluşur)
+    const corner = idx === 0 || Math.abs(r0 - prevR) > 1e-9;
+    const ch = corner ? +row.ch || 0 : 0, rad = corner ? +row.rad || 0 : 0;
     if (r0 >= prevR) {
       // yukarı basamak: köşe (z, r0) dışbükey
       if (rad > 0) {

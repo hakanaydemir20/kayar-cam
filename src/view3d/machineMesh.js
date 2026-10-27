@@ -13,7 +13,7 @@ import { StockMesh } from './stockMesh.js';
 import { buildCabin } from './cabin.js';
 import { numberStrip, crossBlockTex, decalPlane, labelSprite } from './decals.js';
 import { poseOf } from '../sim/pose.js';
-import { bushBodies, gangBodies, subBodies, backBodies, SUB_NUT, PAN_Y } from '../sim/bodies.js';
+import { bushBodies, gangBodies, subBodies, backBodies, subNut, PAN_Y } from '../sim/bodies.js';
 
 const HEAD_K = 310;       // başlık pens alnı = parça ön alnı − HEAD_K
 const DEG = Math.PI / 180;
@@ -253,9 +253,10 @@ export class MachineModel {
   buildSub(barR) {
     const S = this.sub = new THREE.Group(); this.root.add(S);
     this.subNose = new THREE.Group(); S.add(this.subNose);
-    for (const bd of subBodies(barR)) bodyMesh(bd, bd.collet ? this.subNose : S);
-    colletFace(this.subNose, -SUB_NUT - 0.4, 9.5, barR + 0.3, -1);
-    for (let k = 0; k < 4; k++) { const s2 = box(8, 3.5, 3, 'blackOx', -SUB_NUT / 2, 0, 0, this.subNose); const a = k * Math.PI / 2 + Math.PI / 4; s2.position.y = 17.6 * Math.cos(a); s2.position.z = 17.6 * Math.sin(a); }
+    const nut = subNut(this.project?.machine);
+    for (const bd of subBodies(barR, this.project?.machine)) bodyMesh(bd, bd.collet ? this.subNose : S);
+    colletFace(this.subNose, -nut.len - 0.4, Math.min(9.5, nut.r - 2), barR + 0.3, -1);
+    for (let k = 0; k < 4; k++) { const s2 = box(8, 3.5, 3, 'blackOx', 4, 0, 0, this.subNose); const a = k * Math.PI / 2 + Math.PI / 4; s2.position.y = 22.6 * Math.cos(a); s2.position.z = 22.6 * Math.sin(a); }
   }
 
   // ---------------------------------------------------------------- arka ünite (sabit, mavi)

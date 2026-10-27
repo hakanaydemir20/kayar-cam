@@ -77,9 +77,18 @@ describe('çarpışma kontrolü: hatalı kurulumları yakalar', () => {
     const { ss } = run(p);
     expect(ss.collisions.some(c => /T02 .*↔ ana iş milindeki parça/.test(c.msg))).toBe(true);
   });
-  it('kısa parça + uzun tutma: karşı iş mili pens somunu komşu takıma çarpar', () => {
-    const { ss } = run(backPart(6));
+  it('pens somunu ayarı çarpışma kontrolüne girer (Ø80 somun ön kovan bloğuna çarpar)', () => {
+    const p = backPart(6);
+    p.machine.subSpindle.nutDia = 80;
+    const { ss } = run(p);
     expect(ss.collisions.some(c => /pens somunu/.test(c.msg))).toBe(true);
+  });
+  it('arka ünitede komşu takım somunun yolunda: CAM delik derinliğini reddeder (açıklayıcı hata)', () => {
+    const rows = [{ dia: 12, len: 8, ch: 0.3 }];
+    const p = newProject(makePart({ name: 'K', profile: profileFromTable(rows), rows, features: [{ id: 'b', type: 'axialHole', side: 'back', dia: 6, depth: 3 }] }));
+    tool(p, 44).yPos = tool(p, 41).yPos - 12;     // komşu freze ucu somun yarıçapının (15) içinde
+    const { r } = run(p);
+    expect(r.errors.some(e => /arka işleme sınırını/.test(e.msg))).toBe(true);
   });
   it('arka ünitede takımlar çok sık: komşu takım karşı iş milindeki parçaya çarpar', () => {
     const p = backPart(4);
@@ -100,7 +109,7 @@ describe('güvenlik kuralları (çarpışma kontrolünün bulduğu hatalar)', ()
     const p = newProject();
     const ctx = buildContext(p);
     const reach = Math.max(...p.tools.filter(t => t.unit === 'front').map(t => rotaryProfile(t).length));
-    expect(subPark(ctx) - 10.4).toBeGreaterThan(reach + 10);
+    expect(subPark(ctx) - 1.5).toBeGreaterThan(reach + 10);
   });
   it('kovan takımından sonra radyal takıma geçişte önce güvenli X, sonra Z (diş yaklaşması)', () => {
     const { r } = run(newProject());
