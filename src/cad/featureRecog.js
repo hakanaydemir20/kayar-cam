@@ -232,7 +232,7 @@ export function recognizeFeatures(model, fx, faces, profile) {
       if (d0 <= 0.02) feats.push({ id: id(), type: 'axialHole', side: 'front', dia, depth: round(d1), through: d1 >= L - 0.02 });
       else if (d1 >= L - 0.02) feats.push({ id: id(), type: 'axialHole', side: 'back', dia, depth: round(L - d0), through: false });
       else feats.push({ id: id(), type: 'axialHole', side: 'front', dia, depth: round(d1), inner: true, from: round(d0) });
-    } else if (f.type === 'cyl' && f.r < 0 && Math.abs(dot(f.axis, fx.A)) < 1e-3) {
+    } else if (f.type === 'cyl' && f.r < 0 && Math.abs(dot(f.axis, fx.A)) < 1e-3 && normalSpan(f) >= 120) {
       // radyal (çapraz) delik
       let u = f.axis.slice();
       const ps = f.pts.map(p => toPart(fx, p));
@@ -289,6 +289,17 @@ function groupPolygons(feats, id) {
   }
   for (const f of out) delete f._h;
   return out;
+}
+
+/** Silindir yüzü normallerinin eksen etrafındaki açısal kapsamı (derece). Delik ≥ 180 (yarım yüz);
+ *  üçgen ağından (OBJ) gelen birkaç şeritlik dar parça (pah/geçiş kalıntısı) delik sayılmaz. */
+function normalSpan(f) {
+  const [e1, e2] = perpBasis(f.axis);
+  const a = f.nrm.map(n => Math.atan2(dot(n, e2), dot(n, e1))).sort((x, y) => x - y);
+  if (a.length < 2) return 0;
+  let gap = a[0] + 2 * Math.PI - a[a.length - 1];
+  for (let i = 1; i < a.length; i++) gap = Math.max(gap, a[i] - a[i - 1]);
+  return 360 - gap * 180 / Math.PI;
 }
 
 function normAng(a) { let v = a % 360; if (v < 0) v += 360; return Math.abs(v - 360) < 1e-6 ? 0 : v; }

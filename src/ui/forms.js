@@ -1,5 +1,5 @@
 // Form tanımları ve küçük DOM yardımcıları
-import { TOOL_TYPES, UNITS } from '../tools/toolLibrary.js';
+import { TOOL_TYPES, UNITS, INSERT_SHAPES, CHIP_GEOS } from '../tools/toolLibrary.js';
 
 export const h = (tag, attrs = {}, ...kids) => {
   const e = document.createElement(tag);
@@ -19,7 +19,7 @@ export const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
 
 export const OP_PARAMS = {
   face: [['ap', 'Paso derinliği (Z)', 'mm'], ['feed', 'İlerleme (boş = takım)', 'mm/dev'], ['vc', 'Kesme hızı (boş = takım)', 'm/dak']],
-  rough: [['strategy', 'Strateji', 'select:roughStrategy'], ['ap', 'Paso derinliği (radyal / alında eksenel)', 'mm'], ['allowX', 'Finiş payı X (çapta)', 'mm'], ['allowZ', 'Finiş payı Z', 'mm'], ['retract', 'Geri çekme', 'mm'], ['feed', 'İlerleme (boş = takım)', 'mm/dev'], ['vc', 'Kesme hızı (boş = takım)', 'm/dak'], ['contourPass', 'Yarı finiş kontur pasosu', 'bool']],
+  rough: [['strategy', 'Strateji', 'select:roughStrategy'], ['ap', 'Paso derinliği (radyal / alında eksenel)', 'mm'], ['allowX', 'Finiş payı X (çapta)', 'mm'], ['allowZ', 'Finiş payı Z', 'mm'], ['retract', 'Geri çekme', 'mm'], ['feed', 'İlerleme (boş = takım)', 'mm/dev'], ['vc', 'Kesme hızı (boş = takım)', 'm/dak'], ['contourPass', 'Yarı finiş kontur pasosu', 'bool'], ['zMin', 'Başlangıç Z (boş = baştan)', 'mm'], ['zMax', 'Bitiş Z (boş = sona)', 'mm']],
   finish: [['feed', 'İlerleme (boş = takım)', 'mm/dev'], ['vc', 'Kesme hızı (boş = takım)', 'm/dak'], ['tol', 'Kontur toleransı', 'mm']],
   groove: [['z0', 'Kanal başlangıç Z', 'mm'], ['z1', 'Kanal bitiş Z', 'mm'], ['allow', 'Kaba dalış payı', 'mm'], ['feed', 'İlerleme (boş = takım)', 'mm/dev'], ['vc', 'Kesme hızı (boş = takım)', 'm/dak']],
   thread: [['featureId', 'Diş özelliği', 'feat:thread'], ['firstDepth', 'İlk paso derinliği (radyal)', 'mm'], ['springPasses', 'Boş (yay) paso', 'adet'], ['rpm', 'Devir (boş = Vc’den)', 'dev/dak']],
@@ -29,7 +29,7 @@ export const OP_PARAMS = {
   crossDrill: [['featureId', 'Çapraz delik', 'feat:crossHole'], ['peck', 'Gagalama (radyal)', 'mm']],
   flatMill: [['featureId', 'Düzlük', 'feat:flat'], ['ap', 'Paso (radyal)', 'mm'], ['stepover', 'Yanal adım (×D)', '']],
   pocketMill: [['featureId', 'Cep', 'feat:pocket'], ['stepDown', 'Helis adımı (devir başına)', 'mm'], ['stepOver', 'Yanal adım', 'mm']],
-  pickoff: [['grip', 'Tutma boyu', 'mm'], ['feed', 'Yaklaşma ilerlemesi', 'mm/dak']],
+  pickoff: [['grip', 'Tutma boyu', 'mm'], ['feed', 'Yaklaşma ilerlemesi', 'mm/dak'], ['gap', 'Hızlı yaklaşma boşluğu', 'mm'], ['dwell', 'Pens kapanma beklemesi', 's']],
   cutoff: [['feed', 'İlerleme (boş = takım)', 'mm/dev'], ['rpm', 'Devir (boş = Vc’den, senkron)', 'dev/dak'], ['endX', 'Bitiş X (çap)', 'mm'], ['backStock', 'Arka alın payı (arka tornalamada alınır)', 'mm']],
   backDrill: [['featureId', 'Arka delik', 'feat:axialHole:back'], ['peck', 'Gagalama', 'mm'], ['feed', 'İlerleme (boş = takım)', 'mm/dev']],
   backTap: [['featureId', 'Arka delik', 'feat:axialHole:back']],
@@ -50,7 +50,10 @@ export const TOOL_FIELDS = [
   ['type', 'Tip', '', 'select:type'], ['unit', 'Ünite', '', 'select:unit'],
   ['dia', 'Çap', 'mm'], ['noseR', 'Uç radyüsü', 'mm'],
   ['width', 'Genişlik (kanal/kesme)', 'mm'], ['pitch', 'Hatve (kılavuz)', 'mm'],
-  ['insertAngle', 'Kesici uç açısı', '°'], ['tipAngle', 'Uç açısı (matkap)', '°'],
+  ['insertCode', 'Kesici uç kodu (ISO, ör. VCMT 110304)', '', 'text', 'full', ['turn']],
+  ['insertShape', 'Uç tipi (elmas)', '', 'select:insertShape', 'full', ['turn']],
+  ['insertSize', 'Uç kenar boyu', 'mm', 'num', '', ['turn']],
+  ['tipAngle', 'Uç açısı (matkap)', '°', 'num', '', ['drill', 'center', 'ldrill']],
   ['flutes', 'Ağız sayısı', 'adet', 'int'], ['vc', 'Kesme hızı Vc', 'm/dak'],
   ['feed', 'İlerleme (dev başına)', 'mm/dev'], ['fz', 'Diş başı ilerleme', 'mm/diş'],
   ['yPos', 'Yanal konum (Y1 / arka ünite)', 'mm'],
@@ -102,6 +105,8 @@ export function field(obj, key, label, unit, kind, onChange, opts = {}) {
       : which === 'unit' ? Object.entries(UNITS).map(([k, d]) => [k, d.label])
         : which === 'side' ? [['front', 'Ön'], ['back', 'Arka']]
           : which === 'sideBack' ? [['back', 'Arka (karşı iş mili, tahrikli)']]
+            : which === 'insertShape' ? Object.entries(INSERT_SHAPES).map(([k, d]) => [k, d.label])
+            : which === 'chipGeo' ? Object.entries(CHIP_GEOS).map(([k, d]) => [k, d.label])
             : which === 'roughStrategy' ? [['z', 'Z’ye paralel (boyuna)'], ['profile', 'Profile paralel (kontur ofset)'], ['face', 'Alın (X’e paralel)']] : []);
     inp = h('select', {}, items.map(([k, l]) => h('option', { value: k }, l)));
     inp.value = v ?? '';

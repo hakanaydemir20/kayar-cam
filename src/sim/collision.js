@@ -29,7 +29,8 @@ function coneR(s, xa, xb) { // [xa, xb] aralığında en büyük yarıçap
 }
 
 /** İki katı çakışıyor mu */
-export function intersects(a, b) {
+export function intersects(a, b, tol = TOL) {
+  const TOL = tol;   // gövdeler arası güvenlik mesafesi verilirse eksi tolerans (daha erken yakalar)
   const A = aabb(a), B = aabb(b);
   if (ov(A[0], A[1], B[0], B[1]) <= TOL || ov(A[2], A[3], B[2], B[3]) <= TOL || ov(A[4], A[5], B[4], B[5]) <= TOL) return false;
   if (a.t === 'box' && b.t === 'box') return true;
@@ -50,11 +51,22 @@ export function intersects(a, b) {
 
 /** Karşı iş mili gövdesi s ile arka ünite gövdesi b çakışıyor mu. Aktif takımın eksenel (pensle eş eksenli) gövdeleri
  *  pens deliğinden ince ise sayılmaz: o bölgede takım parçanın deliğinin içindedir (oradaki temas parça kontrolünün konusu). */
-export function subHitsBack(s, b, act) {
+export function subHitsBack(s, b, act, tol) {
   if (act && b.tool === act && b.t === 'cyl' && s.t === 'cyl' && s.bore != null &&
       Math.hypot(b.cy - s.cy, b.cz - s.cz) < 0.05 && Math.max(b.r0, b.r1) <= s.bore) return false;
-  return intersects(s, b);
+  return intersects(s, b, tol);
 }
+
+/** Çarpışma ve bindirme tanımları (projeyle kaydedilir: project.machine.collision) */
+export const COLLISION_DEFAULTS = {
+  enabled: true,        // makine gövdesi çarpışma kontrolü
+  clearPart: 0,         // tutucu / gövde ile parça arası en az mesafe (mm)
+  clearBody: 0,         // makine gövdeleri arası en az mesafe (mm): tutucu ↔ burç, karşı mil, arka ünite
+  rapidTol: 0.02,       // G0 ile malzemeye girme (bindirme) toleransı (mm)
+  checkBush: true, checkSub: true, checkBack: true, checkRapid: true,
+  crashCut: true,       // çarpan gövde parçaya girdiği kadar malzemeyi keser (kırmızı gösterilir)
+};
+export function collisionCfg(project) { return { ...COLLISION_DEFAULTS, ...(project?.machine?.collision || {}) }; }
 
 export class Collider {
   constructor(project, stockSim) {
@@ -67,6 +79,9 @@ export class Collider {
     this.barR = project.stock.barDia / 2;
     this.cache = new Map();   // ızgara → {ver, bins}
     this.found = new Map();
+    const c = this.cfg = collisionCfg(project);
+    this.mp = Math.max(0, +c.clearPart || 0);
+    this.tb = TOL - Math.max(0, +c.clearBody || 0);
   }
 
   /** satır aralığında en büyük dış yarıçap (1 mm kutucuk önbelleği, ızgara başına) */
@@ -95,7 +110,8 @@ export class Collider {
     const A = aabb(s);
     // hızlı eleme: eksenden uzaklık
     const rho = s.t === 'cyl' ? Math.hypot(s.cy, s.cz - part.axisZ) : rectDist(A[2], A[3], A[4], A[5], 0, part.axisZ);
-    if (s.t !== 'cyl' && rho > this.barR + TOL) return 0;
+    const mp = this.mp;
+    if (s.t !== 'cyl' && rho > this.barR + TOL + mp) return 0;
     const S = part.S;
     // x aralığı → d aralığı (d = front − x  ya da  d = base − x)
     const dA = part.base - A[1], dB = part.base - A[0];
@@ -112,21 +128,51 @@ export class Collider {
         return mr + d > s.bore + TOL ? mr + d - s.bore : 0;
       }
       const R = Math.max(s.r0, s.r1);
-      return mr + R > rho + TOL ? mr + R - rho : 0;
+      return mr + R + mp > rho + TOL ? mr + R - rho + mp : 0;
     }
-    return mr > rho + TOL ? mr - rho : 0;
+    return mr + mp > rho + TOL ? mr - rho + mp : 0;
+  }
+
+  /** Çarpan gövdenin parça içinde kalan hacmini kes: gövdenin eksene en yakın noktasına kadar, gövdenin açısal genişliğinde */
+  crashCut(s, part, spin, Cdeg = 0) {
+    if (!this.cfg.crashCut) return;
+    const S = part.S, A = aabb(s);
+    const i0 = Math.max(part.i0, S.idx(part.base - A[1])), i1 = Math.min(part.i1, S.idx(part.base - A[0]));
+    if (i1 < i0) return;
+    let rCap, thw, half;
+    if (s.t === 'cyl') {
+      const y = s.cy, z = s.cz - part.axisZ, rho = Math.hypot(y, z), R = Math.max(s.r0, s.r1);
+      rCap = rho - R; thw = Math.atan2(z, y); half = rho > R ? Math.asin(Math.min(1, R / rho)) : Math.PI;
+    } else {
+      const y0 = A[2], y1 = A[3], z0 = A[4] - part.axisZ, z1 = A[5] - part.axisZ;
+      rCap = rectDist(y0, y1, z0 + part.axisZ, z1 + part.axisZ, 0, part.axisZ);
+      if (y0 <= 0 && y1 >= 0 && z0 <= 0 && z1 >= 0) { rCap = 0; thw = 0; half = Math.PI; }
+      else {
+        const angs = [[y0, z0], [y0, z1], [y1, z0], [y1, z1]].map(([y, z]) => Math.atan2(z, y));
+        thw = Math.atan2((z0 + z1) / 2, (y0 + y1) / 2);
+        half = Math.max(...angs.map(a => Math.abs(Math.atan2(Math.sin(a - thw), Math.cos(a - thw)))));
+      }
+    }
+    // dünya açısı → parça çerçevesi (iş mili C kadar dönmüş)
+    S.crashCut(i0, i1, rCap, spin || half >= Math.PI - 1e-6, thw - (Cdeg || 0) * Math.PI / 180, half);
   }
 
   /** t anındaki makine durumunu kontrol et; yeni çarpışmaları döndür */
   check(t, pose1, pose2, st1, st2, path, line) {
     const ss = this.ss, st = ss.state, S = ss.stock;
     const out = [];
-    const hit = (a, b, depth) => {
+    const C = this.cfg;
+    if (!C.enabled) return out;
+    const hit = (a, b, depth, margin = 0) => {
       const key = `${path}|${line}|${a}|${b}`;
       if (this.found.has(key)) return;
       this.found.set(key, 1);
-      out.push({ path, line, t, msg: `Çarpışma: ${a} ↔ ${b}${depth ? ` (${depth.toFixed(2)} mm)` : ''}` });
+      const pen = depth ? depth - margin : 0;
+      out.push({ path, line, t, msg: depth && pen <= 0.0005 && margin > 0
+        ? `Güvenlik mesafesi: ${a} ↔ ${b} arası ${(-pen).toFixed(2)} mm (en az ${margin} mm tanımlı)`
+        : `Çarpışma: ${a} ↔ ${b}${depth ? ` (${pen.toFixed(2)} mm)` : ''}` });
     };
+    const X = (a, b) => intersects(a, b, this.tb);
     const g = this.gang.map(s => moved(s, 0, pose1.m.X / 2, pose1.m.Y || 0));
     const subFace = pose2.m.Z, subLat = pose2.m.X;
     const sb = this.sub.map(s => moved(s, subFace, 0, subLat));
@@ -138,26 +184,29 @@ export class Collider {
     const SS = ss.subStock();
     const subPart = SS ? { S: SS, base: subFace + grip, axisZ: subLat, i0: 0, i1: iSplit - 1, barBeyond: false } : null;
     const nm = (s) => s.name || 'gövde';
+    // istenmeyen temas: gövde parçaya girdiyse girdiği kadar malzemeyi kes (kırmızı “çarpışma kesiği”)
+    const spin1 = st1 && st1.main?.dir !== 'stop' && !st1.cAxis, spin2 = st2 && st2.sub?.dir !== 'stop' && !st2.subCAxis;
+    const crash = (s, part, d, margin, spin, C) => { if (d - margin > 0.005 && s.bore == null) this.crashCut(s, part, spin, C); };
     // gang ↔ parçalar, burç, karşı iş mili, arka ünite
     for (const s of g) {
       const own = s.tool && s.tool === act1 && s.cut;
-      if (!own) { const d = this.partHit(s, mainPart); if (d) hit(nm(s), 'ana iş milindeki parça/çubuk', d); }
-      if (subPart) { const d = this.partHit(s, subPart); if (d) hit(nm(s), 'karşı iş milindeki parça', d); }
-      for (const b of this.bush) if (intersects(s, b)) hit(nm(s), b.name);
-      for (const b of sb) if (intersects(s, b)) hit(nm(s), b.name);
-      for (const b of this.back) if (intersects(s, b)) hit(nm(s), b.name);
+      if (!own) { const d = this.partHit(s, mainPart); if (d) { hit(nm(s), 'ana iş milindeki parça/çubuk', d, s.bore != null ? 0 : this.mp); crash(s, mainPart, d, this.mp, spin1, pose1.p.C); } }
+      if (subPart) { const d = this.partHit(s, subPart); if (d) { hit(nm(s), 'karşı iş milindeki parça', d, s.bore != null ? 0 : this.mp); crash(s, subPart, d, this.mp, spin2, pose2.p.C); } }
+      if (C.checkBush) for (const b of this.bush) if (X(s, b)) hit(nm(s), b.name);
+      if (C.checkSub) for (const b of sb) if (X(s, b)) hit(nm(s), b.name);
+      if (C.checkBack) for (const b of this.back) if (X(s, b)) hit(nm(s), b.name);
     }
     // karşı iş mili ↔ ana parça (pens deliği hariç), burç, arka ünite
     for (const s of sb) {
       const d = this.partHit(s, mainPart); if (d) hit(s.name, 'ana iş milindeki parça/çubuk', d);
-      for (const b of this.bush) if (intersects(s, b)) hit(s.name, b.name);
-      for (const b of this.back) if (subHitsBack(s, b, act2)) hit(s.name, nm(b));
+      if (C.checkBush) for (const b of this.bush) if (X(s, b)) hit(s.name, b.name);
+      if (C.checkBack) for (const b of this.back) if (subHitsBack(s, b, act2, this.tb)) hit(s.name, nm(b));
     }
     // karşı iş milindeki parça ↔ arka ünite / burç
     if (subPart) {
       for (const b of this.back) {
         if (b.tool && b.tool === act2 && b.cut) continue;
-        const d = this.partHit(b, subPart); if (d) hit(nm(b), 'karşı iş milindeki parça', d);
+        const d = this.partHit(b, subPart); if (d) { hit(nm(b), 'karşı iş milindeki parça', d, b.bore != null ? 0 : this.mp); crash(b, subPart, d, this.mp, spin2, pose2.p.C); }
       }
     }
     return out;

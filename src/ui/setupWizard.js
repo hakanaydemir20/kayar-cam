@@ -5,7 +5,9 @@ import { PartPreview } from '../view3d/partPreview.js';
 import { refixture } from './stepFlow.js';
 import { analyzeFaces, toPart } from '../cad/featureRecog.js';
 import { makePart, profileFromTable, mirrorTablePart, suggestBar, STD_BARS } from '../part/part.js';
-import { newProject, autoOperations } from '../project.js';
+import { mirrorSketchPart } from '../part/sketch.js';
+import { MATERIALS } from '../tools/toolLibrary.js';
+import { newProject } from '../project.js';
 
 const r3 = (v) => Math.round(v * 1000) / 1000;
 
@@ -32,7 +34,8 @@ export class SetupWizard {
     this.zMode = this.edit && this.zShift ? (Math.abs(this.zShift - this.part.length) < 1e-6 ? 'back' : 'value') : 'front';
     this.bar = this.edit ? P.stock.barDia : (suggestBar(this.part.maxDia, P.machine.maxBarDia) || 20);
     this.faceStock = this.edit ? P.stock.faceStock : 0.3;
-    this.changedGeom = false;
+    this.material = P.stock.material || 'free';
+    this.changedGeom = !!opts.geomChanged;   // çizimden düzenleme: işlem planı yeniden kurulur
     this.lost = [];
     this.steps = [
       ...(this.kind === 'table' ? [{ key: 'dims', title: 'Ölçüler', hint: 'Parçayı çap/boy satırlarıyla tanımlayın' }] : []),
@@ -149,6 +152,12 @@ export class SetupWizard {
     sel.addEventListener('change', () => { this.bar = +sel.value; this.render(); });
     const fs = h('input', { type: 'number', step: 'any', value: this.faceStock });
     fs.addEventListener('change', () => { this.faceStock = Math.max(0, parseFloat(fs.value) || 0); });
+    const ms = h('select', {}, Object.entries(MATERIALS).map(([k, m]) => h('option', { value: k }, m.label)));
+    ms.value = this.material;
+    ms.addEventListener('change', () => { this.material = ms.value; this.render(); });
+    const M = MATERIALS[this.material];
+    b.append(h('div', { class: 'f full' }, h('label', {}, 'Malzeme cinsi'), ms),
+      h('div', { class: 'hint' }, `Önerilen kesme: kaba Vc ${M.vcRough} m/dak, f ${M.fRough} mm/dev, en fazla paso ${M.apMax} mm · ince Vc ${M.vcFinish} m/dak · delme Vc ${M.vcDrill} m/dak`));
     b.append(h('div', { class: 'fg' },
       h('div', { class: 'f' }, h('label', {}, 'Çubuk çapı'), sel),
       h('div', { class: 'f' }, h('label', {}, 'Alın payı', h('span', { class: 'u' }, 'mm')), fs)));
@@ -192,8 +201,8 @@ export class SetupWizard {
   flip() {
     if (this.kind === 'step') { this.refix({ flip: !this.res.flip }); }
     else {
-      const m = mirrorTablePart(this.part);
-      this.part = m.part; this.rows = m.part.rows.map(r => ({ ...r })); this.lost = m.lost;
+      const m = this.kind === 'sketch' ? mirrorSketchPart(this.part) : mirrorTablePart(this.part);
+      this.part = m.part; this.rows = (m.part.rows || []).map(r => ({ ...r })); this.lost = m.lost;
       this.changedGeom = true;
       if (this.zMode === 'back') this.zShift = this.part.length;
       else if (this.zMode !== 'front') this.zShift = r3(this.part.length - this.zShift);
@@ -254,17 +263,18 @@ export class SetupWizard {
       // geometri değişti: makine, post, takımlar ve stok ayarları korunur, işlem planı yeniden kurulur
       P = newProject(part);
       for (const k of ['stock', 'tools', 'post', 'machine', 'sync']) if (P0[k] !== undefined) P[k] = P0[k];
-      P.ops = autoOperations(P);
-    } else P = newProject(part);
+      P.ops = [];                       // geometri değişti: plan kullanıcı “Otomatik” deyince kurulur
+    } else { P = newProject(part); P.ops = []; }   // yeni parça: işlem ve kod, düğmeye basılmadan üretilmez
     P.name = part.name;
     P.zero = zero;
     P.stock.barDia = this.bar;
     P.stock.faceStock = this.faceStock;
+    P.stock.material = this.material;
     app.project = P;
     app.sel = { kind: 'part' };
     app.closeModal();
     app.recalc();
-    app.toast(this.edit ? 'Bağlama ve referans güncellendi' : `${part.name} hazır — ${P.ops.length} işlemlik plan oluşturuldu`, 3500);
+    app.toast(P.ops.length ? 'Bağlama ve referans güncellendi' : `${part.name} hazır — işlem planı için “Otomatik” ya da “İşlem ekle” düğmesine basın`, 4500);
   }
 }
 

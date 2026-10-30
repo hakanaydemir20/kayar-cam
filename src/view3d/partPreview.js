@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { toPart } from '../cad/featureRecog.js';
 
-const C = { part: 0x9fb3c8, edge: 0x3b4a5a, front: 0x3ecf8e, back: 0xf5a524, axis: 0x93a1af, zero: 0x3b82f6, hover: 0x60a5fa };
+const C = { part: 0xb9c3cf, edge: 0x1c232b, front: 0x3ecf8e, back: 0xf5a524, axis: 0x4f5b68, zero: 0x3b82f6, hover: 0x60a5fa };
 
 function textSprite(text, color = '#e6edf3', bg = 'rgba(14,20,25,.86)', px = 0.022) {
   const c = document.createElement('canvas');
@@ -33,17 +33,16 @@ function arrow(dir, len, color, origin) {
 export class PartPreview {
   constructor(container) {
     this.container = container;
-    const r = this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    const r = this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     r.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    r.toneMapping = THREE.ACESFilmicToneMapping;
-    r.toneMappingExposure = 0.95;
+    r.toneMapping = THREE.NoToneMapping;          // mat, parlamasız (SolidWorks gölgeli + kenarlı görünüm)
+    r.setClearColor(0x000000, 0);
     container.appendChild(r.domElement);
     const s = this.scene = new THREE.Scene();
-    s.background = new THREE.Color(0x10161c);
-    s.add(new THREE.HemisphereLight(0xe8f0ff, 0x1a2027, 1.1));
-    const key = new THREE.DirectionalLight(0xffffff, 1.6); key.position.set(60, 120, 160); s.add(key);
-    const rim = new THREE.DirectionalLight(0x9ec5ff, 0.6); rim.position.set(-120, 40, -100); s.add(rim);
+    s.add(new THREE.AmbientLight(0xffffff, 0.75));
+    s.add(new THREE.HemisphereLight(0xffffff, 0x8f99a5, 0.45));
     this.camera = new THREE.PerspectiveCamera(32, 1, 0.1, 5000);
+    const key = new THREE.DirectionalLight(0xffffff, 0.95); key.position.set(0.35, 0.55, 1); this.camera.add(key); s.add(this.camera);
     this.controls = new OrbitControls(this.camera, r.domElement);
     this.controls.enableDamping = true;
     this.root = new THREE.Group(); s.add(this.root);
@@ -78,7 +77,7 @@ export class PartPreview {
     const first = !this.part || this.part !== part;
     this.part = part;
     this.root.clear();
-    const mat = new THREE.MeshStandardMaterial({ color: C.part, metalness: 0.55, roughness: 0.38, side: THREE.DoubleSide });
+    const mat = new THREE.MeshStandardMaterial({ color: C.part, metalness: 0, roughness: 0.95, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
     let geo;
     if (part.mesh && part.fixture) {
       const m = part.mesh, P = m.positions, pos = new Float32Array(P.length);
@@ -99,7 +98,7 @@ export class PartPreview {
     }
     this.mesh = new THREE.Mesh(geo, mat);
     this.root.add(this.mesh);
-    this.root.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo, 28), new THREE.LineBasicMaterial({ color: C.edge })));
+    this.root.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo, 24), new THREE.LineBasicMaterial({ color: C.edge })));
     if (first) this.fit();
     this.setMarks(zShift, opts);
   }
@@ -139,8 +138,8 @@ export class PartPreview {
     // makine yönü: çubuk kılavuz burçtan (−x) gelir, karşı iş mili +x'te (etiketler parçanın altında, içe doğru)
     const yb = -R - S * 0.9;
     O.add(arrow([1, 0, 0], S * 1.1, C.front, [-S * 1.2, yb, 0]));
-    const dl = textSprite('karşı iş mili yönü', '#93a1af', 'rgba(14,20,25,.6)', 0.018); dl.position.set(-S * 1.3, yb, 0); dl.center.set(1, 0.5); O.add(dl);
-    const bu = textSprite('kılavuz burç / çubuk tarafı', '#93a1af', 'rgba(14,20,25,.6)', 0.018); bu.position.set(-L, yb, 0); bu.center.set(0, 0.5); O.add(bu);
+    const dl = textSprite('karşı iş mili yönü', '#c9d3dd', 'rgba(14,20,25,.85)', 0.018); dl.position.set(-S * 1.3, yb, 0); dl.center.set(1, 0.5); O.add(dl);
+    const bu = textSprite('kılavuz burç / çubuk tarafı', '#c9d3dd', 'rgba(14,20,25,.85)', 0.018); bu.position.set(-L, yb, 0); bu.center.set(0, 0.5); O.add(bu);
     // referans (Z0 X0): Z+ parçanın içine (−x), X+ yukarı
     const x0 = -zShift;
     const z = new THREE.Group(); z.position.set(x0, 0, 0); O.add(z);

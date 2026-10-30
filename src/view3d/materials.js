@@ -36,6 +36,8 @@ export function mat(name) {
     arrow:     { color: 0xe01e2a, metalness: 0.0, roughness: 0.5, emissive: 0x5a0508 },
     tinted:    { color: 0x2c3a4a, metalness: 0.1, roughness: 0.05, transparent: true, opacity: 0.28, depthWrite: false },
   }[name];
-  M[name] = new THREE.MeshStandardMaterial({ ...P, side: P.transparent ? THREE.DoubleSide : THREE.FrontSide });
+  // CAM grafiği (Mastercam benzeri): parlama ve yansıma yok, mat gölgelendirme
+  const matte = { ...P, metalness: 0, roughness: Math.max(P.roughness, 0.9) };   // SolidWorks gibi: yansımasız, parlamasız
+  M[name] = new THREE.MeshStandardMaterial({ ...matte, side: P.transparent ? THREE.DoubleSide : THREE.FrontSide });
   return M[name];
 }

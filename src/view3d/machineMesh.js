@@ -157,34 +157,47 @@ export class MachineModel {
     // ---- iç taban: kılavuz burç sütunu ve kızak yatakları ----
     this.inner = new THREE.Group(); R.add(this.inner);
     const I = this.inner;
+    const body = this.bodyObjs = [];   // makine iç yapısı (gizlenebilir): iş milleri, burç ve takımlar dışındaki her şey; dış kabin ayrı (setCabin)
     // burç ünitesi: çarpışma kontrolüyle aynı gövdeler (ince konik uç; çapraz takım pens somunları üstünden geçer)
     for (const bd of bushBodies()) bodyMesh(bd, I);
     rb(-98, 80, 250, 330, -300, 250, 'starBlue', I, 10);                         // mavi üst kapak
     cylX(56, 1.5, 'paintMid', -32, 0, 0, I, 64);                                 // burç yuvası (sütun yüzünde ince halka)
     for (let k = 0; k < 6; k++) { const a = k * Math.PI / 3 + 0.5; boltX(I, -26, 28.5 * Math.cos(a), 28.5 * Math.sin(a), 1.8); }
+    body.push(...I.children);
     colletFace(I, LAYOUT.bushFace, 11, barR + 0.02, 1);                          // kılavuz burç (somunun önünde)
+    const nI = I.children.length;
     // karşı iş mili ve arka ünite tablası
     rb(40, 560, PAN_Y, PAN_Y + 26, -230, 130, 'castDark', I, 5);
     for (const z of [-60, 60]) rb(60, 540, PAN_Y + 26, PAN_Y + 36, z - 9, z + 9, 'chrome', I, 2);
     // ---- kayar başlık (Z1) — kabinin içinde, burç sütununun arkasında ----
+    body.push(...I.children.slice(nI));
     this.head = new THREE.Group(); R.add(this.head);
     rbox(190, 70, 170, 'paint', -95, -68, 0, this.head, 8);                      // sürgü
     cylX(60, 165, 'paint', -175, 0, 0, this.head, 64);                           // iş mili gövdesi
     cylX(61, 8, 'starBlue', -60, 0, 0, this.head, 64);
     cylX(46, 12, 'steel', -10, 0, 0, this.head, 64);                             // ön flanş
+    body.push(...this.head.children);
     ringX(30, barR + 1, 24, 'darkSteel', 2, this.head);
     this.mainNose = new THREE.Group(); this.head.add(this.mainNose);
     ringX(22, barR + 0.2, 10, 'chrome', 26, this.mainNose);                     // pens somunu
     for (let k = 0; k < 4; k++) { const s2 = box(10, 4, 3, 'blackOx', 31, 0, 0, this.mainNose); const a = k * Math.PI / 2; s2.position.y = 21 * Math.cos(a); s2.position.z = 21 * Math.sin(a); }
     rbox(70, 56, 80, 'starBlue', -150, 82, 0, this.head, 8);                     // iş mili motoru
+    body.push(this.head.children.at(-1));
+    const nR = R.children.length;
     rb(-560, -90, PAN_Y, -103, -95, 95, 'castDark', R, 5);                       // başlık yatağı (sabit)
     for (const z of [-55, 55]) rb(-550, -100, -103, -95, z - 8, z + 8, 'chrome', R, 2);
+    body.push(...R.children.slice(nR));
     // çubuk (stok ızgarası dışında kalan kısım)
     this.bar = cylX(barR, 900, 'stock', -900, 0, 0, R, 48);
 
     this.buildGang();
     this.buildSub(barR);
     this.buildBack();
+    const toolHolders = new Set([...this.tools.values()].map(v => v.holder));
+    // takım tutma blokları (gang plakası blokları, çapraz blok, kovan bloğu, arka ünite gövdesi): ayrı açılır/kapanır
+    this.holderObjs = [this.gang, this.back].flatMap(G => G.children.filter(o => !toolHolders.has(o) && !(this.axisObjs || []).includes(o)));
+    body.push(...this.subBody);
+    this.bodyObjs = body.flat();
 
     // soğutma sıvısı püskürtme efekti
     this.spray = new THREE.Group(); R.add(this.spray);
@@ -193,7 +206,32 @@ export class MachineModel {
     this.spray.add(this.sprayMesh);
     this.spray.visible = false;
     this.buildAxes();
+    this.buildEdges();
   }
+
+  /** Gölgeli + kenarlı görünüm: sabit gövde ve takım ağlarına kenar çizgisi (eksen okları, saydam ve efekt ağları hariç) */
+  buildEdges() {
+    const skip = new Set();
+    for (const o of this.axisObjs || []) o.traverse(c => skip.add(c));
+    this.spray?.traverse(c => skip.add(c));
+    const lm = new THREE.LineBasicMaterial({ color: 0x14191f, transparent: true, opacity: 0.85 });
+    this.edgeObjs = [];
+    const cache = new Map();
+    this.root.traverse(o => {
+      if (!o.isMesh || skip.has(o) || o.material?.transparent || !o.geometry) return;
+      let eg = cache.get(o.geometry);
+      if (!eg) { eg = new THREE.EdgesGeometry(o.geometry, 30); cache.set(o.geometry, eg); }
+      const l = new THREE.LineSegments(eg, lm);
+      l.raycast = () => {};
+      o.add(l); this.edgeObjs.push(l);
+    });
+    // takım saydamlığıyla birlikte kenar da sönsün: takım malzeme listesine kenar malzemesi kopyası
+    for (const [, v] of this.tools) {
+      const m2 = lm.clone(); v.mats.push(m2);
+      v.holder.traverse(o => { if (o.isLineSegments) o.material = m2; });
+    }
+  }
+  setEdges(on) { for (const l of this.edgeObjs || []) l.visible = on; }
 
   // ---------------------------------------------------------------- gang tool post (X1/Y1)
   buildGang() {
@@ -254,7 +292,8 @@ export class MachineModel {
     const S = this.sub = new THREE.Group(); this.root.add(S);
     this.subNose = new THREE.Group(); S.add(this.subNose);
     const nut = subNut(this.project?.machine);
-    for (const bd of subBodies(barR, this.project?.machine)) bodyMesh(bd, bd.collet ? this.subNose : S);
+    this.subBody = [];
+    for (const bd of subBodies(barR, this.project?.machine)) { const m = bodyMesh(bd, bd.collet ? this.subNose : S); if (/gövde|kapa|kızak|taban/i.test(bd.name || '')) this.subBody.push(m); }
     colletFace(this.subNose, -nut.len - 0.4, Math.min(9.5, nut.r - 2), barR + 0.3, -1);
     for (let k = 0; k < 4; k++) { const s2 = box(8, 3.5, 3, 'blackOx', 4, 0, 0, this.subNose); const a = k * Math.PI / 2 + Math.PI / 4; s2.position.y = 22.6 * Math.cos(a); s2.position.z = 22.6 * Math.sin(a); }
   }
@@ -304,6 +343,10 @@ export class MachineModel {
     this.axisObjs.push(c2, c2s);
   }
 
+  /** Makine gövdesi (kabin, sütun, kızaklar, ünite gövdeleri): kapalıyken yalnız iş milleri, burç ve takımlar görünür */
+  setBody(on) { for (const o of this.bodyObjs) o.visible = on; }
+  /** Takım tutma blokları (varsayılan gizli: yalnız takımlar görünür) */
+  setHolders(on) { for (const o of this.holderObjs || []) o.visible = on; }
   setAxesVisible(on) { if (this.axes) for (const o of this.axisObjs) o.visible = on; }
   /** kabin: 'full' | 'cut' (ön kapaklar gizli) | 'none' */
   setCabin(mode) {
@@ -401,7 +444,7 @@ export class MachineModel {
     const tool1 = s1 ? s1.tool : null;
     this.gang.position.set(0, pose1.m.X / 2, pose1.m.Y);
     // soğutma: aktif takım ucunda püskürtme
-    const cool1 = s1 && s1.coolant && tool1 && m1 && m1.kind !== 'rapid';
+    const cool1 = this.coolantOn !== false && s1 && s1.coolant && tool1 && m1 && m1.kind !== 'rapid';
     this.spray.visible = !!cool1;
     if (cool1) {
       const axial = tool1.unit === 'front';

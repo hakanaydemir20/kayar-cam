@@ -99,12 +99,7 @@ export function runPipeline(project) {
     errors.push({ src: 'post', msg: e.message });
   }
   if (posted) {
-    const pick = project.ops.find(o => o.type === 'pickoff' && o.enabled);
-    const cutOp = project.ops.find(o => o.type === 'cutoff' && o.enabled);
-    const grip = pick ? Math.round(pickGrip(pick.params.grip, project.part.length, Math.max(0, +cutOp?.params.backStock || 0), project.machine) * 1000) / 1000 : 5;
-    const frames = makeFrames({ L: project.part.length, grip, zShift: project.zero?.zShift || 0 });
-    sim = interpret(posted.text, { profile: project.post, machine: project.machine, tools: project.tools, frames });
-    sim.frames = frames;
+    sim = simulateText(project, posted.text);
     for (const e of sim.errors) errors.push({ ...e, src: 'nc' });
     // öz-kontrol: CAM'in amaçladığı konum = makinenin yorumlanan konumu
     posted.checks.forEach((list, pi) => {
@@ -125,6 +120,17 @@ export function runPipeline(project) {
     for (const w of sim.warnings) warnings.push({ ...w, src: 'nc' });
   }
   return { built, posted, sim, errors, warnings };
+}
+
+/** NC metnini projenin makinesi/takımlarıyla yorumlar (CAM çıktısı veya elle yazılmış kod) */
+export function simulateText(project, text) {
+  const pick = project.ops.find(o => o.type === 'pickoff' && o.enabled);
+  const cutOp = project.ops.find(o => o.type === 'cutoff' && o.enabled);
+  const grip = pick ? Math.round(pickGrip(pick.params.grip, project.part.length, Math.max(0, +cutOp?.params.backStock || 0), project.machine) * 1000) / 1000 : 5;
+  const frames = makeFrames({ L: project.part.length, grip, zShift: project.zero?.zShift || 0 });
+  const sim = interpret(text, { profile: project.post, machine: project.machine, tools: project.tools, frames });
+  sim.frames = frames;
+  return sim;
 }
 
 export function saveProject(p) {

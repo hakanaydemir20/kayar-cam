@@ -21,6 +21,7 @@ export class Stock {
   /** yerinde sıfırla (görüntü ağları aynı nesneyi kullanmaya devam eder) */
   reinit() {
     this.r.fill(this.R); this.rin.fill(0); this.rowMax.fill(this.R);
+    if (this.crash) this.crash.fill(0);
     this.version++; this.rowVersion.fill(this.version);
   }
   get dMax() { return this.dMin + (this.nz - 1) * this.dz; }
@@ -30,9 +31,32 @@ export class Stock {
     const s = Object.create(Stock.prototype);
     Object.assign(s, this);
     s.r = this.r.slice(); s.rin = this.rin.slice(); s.rowMax = this.rowMax.slice(); s.rowVersion = this.rowVersion.slice();
+    if (this.crash) s.crash = this.crash.slice();
     return s;
   }
-  copyFrom(o) { this.r.set(o.r); this.rin.set(o.rin); this.rowMax.set(o.rowMax); this.version++; }
+  copyFrom(o) { this.r.set(o.r); this.rin.set(o.rin); this.rowMax.set(o.rowMax); if (o.crash) (this.crash ||= new Uint8Array(this.r.length)).set(o.crash); else if (this.crash) this.crash.fill(0); this.version++; }
+  /** Çarpışma kesiği: istenmeyen temas eden gövde malzemeyi rCap'e kadar keser, hücreler “çarpışma” işaretlenir.
+   *  ring: iş mili dönüyor (bütün çevre); değilse yalnız [thc ± half] açısı (parça çerçevesi, radyan). */
+  crashCut(i0, i1, rCap, ring, thc = 0, half = Math.PI) {
+    i0 = Math.max(0, i0); i1 = Math.min(this.nz - 1, i1);
+    if (i1 < i0) return 0;
+    const nth = this.nth, dth = 2 * Math.PI / nth;
+    const C = this.crash ||= new Uint8Array(this.r.length);
+    rCap = Math.max(0, rCap);
+    let removed = 0;
+    for (let i = i0; i <= i1; i++) {
+      if (this.rowMax[i] <= rCap + 1e-4) continue;
+      const o = i * nth;
+      let hit = false;
+      for (let j = 0; j < nth; j++) {
+        if (!ring) { let D = j * dth - thc; D = Math.atan2(Math.sin(D), Math.cos(D)); if (Math.abs(D) > half) continue; }
+        if (this.r[o + j] > rCap + 1e-4) { removed = Math.max(removed, this.r[o + j] - rCap); this.r[o + j] = rCap; C[o + j] = 1; hit = true; }
+      }
+      if (hit) this.recomputeRow(i);
+    }
+    if (removed > 0) this.markDirty(i0, i1);
+    return removed;
+  }
   maxR(i) { return this.rowMax[i]; }
   recomputeRow(i) { let m = 0; const o = i * this.nth; for (let j = 0; j < this.nth; j++) if (this.r[o + j] > m) m = this.r[o + j]; this.rowMax[i] = m; }
   resetRows() { for (let i = 0; i < this.nz; i++) this.recomputeRow(i); }
@@ -320,9 +344,9 @@ export class StockSim {
         prevP = p; prevM = mp;
       }
     }
-    if (m.kind === 'rapid' && maxRemoved > 0.02) {
+    if (m.kind === 'rapid' && this.collider?.cfg.checkRapid !== false && maxRemoved > (this.collider ? +this.collider.cfg.rapidTol : 0.02)) {
       if (!this.collisions.some(c => c.path === m.path && c.line === m.line)) {
-        this.collisions.push({ path: m.path, line: m.line, msg: `G0 hızlı hareketle malzemeye temas (${maxRemoved.toFixed(2)} mm) — ${tool.name}`, t: m.t0 });
+        this.collisions.push({ path: m.path, line: m.line, msg: `Bindirme: G0 hızlı hareketle malzemeye girildi (${maxRemoved.toFixed(2)} mm) — ${tool.name}`, t: m.t0 });
       }
     }
     if (tool.type === 'cutoff') this.checkSeparation();

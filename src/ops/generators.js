@@ -51,7 +51,7 @@ export function defaultParams(type) {
     case 'crossDrill': return { featureId: null, peck: null };
     case 'flatMill': return { featureId: null, ap: 1.0, stepover: 0.6 };
     case 'pocketMill': return { featureId: null, stepDown: 0.5, stepOver: 0.5 };
-    case 'pickoff': return { grip: 6, feed: 500 };
+    case 'pickoff': return { grip: 6, feed: 500, gap: 1, dwell: 0.3 };
     case 'cutoff': return { feed: null, rpm: null, endX: -0.4, backStock: 0 };
     case 'backDrill': return { featureId: null, peck: null, feed: null };
     case 'backTap': return { featureId: null };
@@ -87,8 +87,11 @@ function startTurning(prog, ctx, tool, op, opts = {}) {
   prog.tool(tool);
   prog.feedMode('rev');
   const vc = op.params.vc || tool.vc;
-  const maxRpm = Math.min(ctx.machine.mainSpindle.maxRpm, ctx.project.stock.maxRpm || Infinity);
+  // işlem başına iş mili: sabit kesme hızı (G96 + G50 sınırı) veya sabit devir (G97)
+  const opMax = +op.params.maxRpm > 0 ? +op.params.maxRpm : Infinity;
+  const maxRpm = Math.min(ctx.machine.mainSpindle.maxRpm, ctx.project.stock.maxRpm || Infinity, opMax);
   if (opts.constRpm) prog.spindle({ which: 'main', dir: 'cw', rpm: lim(ctx, opts.constRpm, 'main') });
+  else if (op.params.spindleMode === 'rpm' && +op.params.rpm > 0) prog.spindle({ which: 'main', dir: 'cw', rpm: lim(ctx, Math.min(+op.params.rpm, maxRpm), 'main') });
   else prog.spindle({ which: 'main', dir: 'cw', css: vc, maxRpm: Math.round(maxRpm) });
   prog.coolant(true);
 }
@@ -169,7 +172,11 @@ GEN.rough = (prog, ctx, op, tool, extra) => {
   const A = dilate(env, p.allowZ, p.allowX / 2);
   const P = noseTipPath(A, tool.noseR);
   const R0 = ctx.barR;
-  const [z0, z1, inner] = zRange(ctx, extra);
+  let [z0, z1, inner] = zRange(ctx, extra);
+  // isteğe bağlı Z aralığı (kalan malzeme: önceki takımın erişemediği bölge)
+  if (p.zMin != null && p.zMin !== '' && Number.isFinite(+p.zMin)) { z0 = Math.max(z0, +p.zMin); inner = inner || +p.zMin > 0; }
+  if (p.zMax != null && p.zMax !== '' && Number.isFinite(+p.zMax)) z1 = Math.min(z1, +p.zMax);
+  if (z1 <= z0 + 1e-6) { prog.comment('KABA: Z ARALIGI BOS'); return; }
   startTurning(prog, ctx, tool, op);
   if (extra?.seg) prog.comment(`SEGMENT ${extra.seg} Z${r3(Math.max(0, z0))}-${r3(z1)}`);
   const F = p.feed || tool.feed;
@@ -713,10 +720,11 @@ GEN.pickoff = (prog, ctx, op, tool, extra) => {
   prog.m('spindleSync');
   // parça önü kesme anında L + arka alın payı konumunda: tutma boyu tam 'grip' olsun (G55 çerçevesi buna dayanır)
   const zGrip = ctx.L + (ctx.backStock || 0) - grip;
-  prog.rapid({ Z: r3(zGrip + 1) });
+  const gap = Math.max(0.2, +p.gap || 1);           // hızlı yaklaşma boşluğu (tutma noktasının önünde)
+  prog.rapid({ Z: r3(zGrip + gap) });
   prog.line({ Z: r3(zGrip) }, p.feed);
   prog.m('subChuckClose');
-  prog.dwell(0.3);
+  prog.dwell(Math.max(0.1, +p.dwell || 0.3));       // pens kapanma beklemesi
   prog.wait(extra.w2);
   prog.wait(extra.w3);
   prog.m('spindleSyncOff');

@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import occtFactory from 'occt-import-js';
 import wasmUrl from 'occt-import-js/dist/occt-import-js.wasm?url';
 import { readStep } from '../cad/stepImport.js';
+import { readObj } from '../cad/objImport.js';
 import { partFromModel, toPart } from '../cad/featureRecog.js';
 
 let occtP = null;
@@ -29,13 +30,13 @@ function fromB64(b64) {
   return u;
 }
 
-/** file: File veya null (b64 verilir). opts: {flip, axisFaceId} */
+/** 3D parça: STEP veya OBJ. file: File veya null (b64 verilir). opts: {flip, axisFaceId, fmt: 'step'|'obj'} */
 export async function importStepFile(file, b64 = null, opts = {}) {
   const bytes = file ? new Uint8Array(await file.arrayBuffer()) : fromB64(b64);
-  const occt = await getOcct();
-  const model = readStep(occt, bytes);
-  const name = file ? file.name.replace(/\.(stp|step)$/i, '') : undefined;
-  const res = { model, b64: b64 || toB64(bytes), name };
+  const fmt = file ? (/\.obj$/i.test(file.name) ? 'obj' : 'step') : (opts.fmt || 'step');
+  const model = fmt === 'obj' ? readObj(new TextDecoder().decode(bytes)) : readStep(await getOcct(), bytes);
+  const name = file ? file.name.replace(/\.(stp|step|obj)$/i, '') : undefined;
+  const res = { model, b64: b64 || toB64(bytes), name, fmt };
   return refixture(res, opts);
 }
 
@@ -43,6 +44,7 @@ export async function importStepFile(file, b64 = null, opts = {}) {
 export function refixture(res, opts = {}) {
   const { part } = partFromModel(res.model, { name: res.name, flip: opts.flip, axisFaceId: opts.axisFaceId });
   part.mesh = res.model;
+  part.meshFmt = res.fmt || 'step';
   part.flip = !!opts.flip;
   part.axisFaceId = opts.axisFaceId ?? null;
   return { ...res, part, flip: !!opts.flip, axisFaceId: opts.axisFaceId ?? null };

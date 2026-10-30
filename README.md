@@ -8,7 +8,7 @@
 
 Kayar otomat (Swiss-type) için çevrimdışı çalışan bir CAM programıdır. İş akışı Mastercam Torna ve ESPRIT Swiss modüllerine benzer:
 
-1. STEP parça yükleme
+1. STEP / OBJ parça yükleme
 2. Bağlama ve sıfır noktası
 3. Özellik tanıma ve otomatik işlem planı
 4. İki kanallı ($1/$2) senkron program
@@ -31,19 +31,103 @@ Kayar otomat (Swiss-type) için çevrimdışı çalışan bir CAM programıdır.
   npm run build      # dist/index.html üret
   ```
 
-## İş akışı
+## Ekran düzeni
 
-Üstteki ray beş durağı sırayla gösterir. Her durak kendi durumunu taşır: mavi = hazır, kırmızı = sorun var (tıklayınca sorunun yerine gider), turuncu = kontrol sürüyor.
-
-| Durak | Ne yapılır |
+| Bölge | İçerik |
 |---|---|
-| **1 Parça** | İlk açılışta ya da **Yeni** ile başlangıç ekranı gelir: *3D model aç* (STEP), *Ölçülerden çiz* (çap/boy/pah/radyüs satırları), *Örnek parçayla dene*, *Kayıtlı projeyi aç*. |
-| **2 Bağlama ve sıfır** | Kurulum penceresi parçayı 3D gösterir. **Torna ekseni** (STEP): otomatik ya da silindirik yüze tıklayarak. **Ön yüz**: yeşil halka ön, turuncu halka arka (kesme) tarafıdır; *Ön ve arkayı değiştir* düğmesiyle ya da modelin ucuna tıklayarak çevrilir. **Referans noktası (Z0 X0)**: ön alın merkezi (önerilen), arka alın merkezi, *modelden seç* (düz alın yüzüne ya da profil köşesine yapışır) veya ön alından mm değeri. X0 her zaman torna eksenidir. **Çubuk**: önerilen standart çap, alın payı, tanınan özelliklerin seçimi. |
-| **3 İşlemler** | Özelliklerden otomatik işlem planı kurulur. Sol paneldeki **+ İşlem ekle** gruplu menüden yeni işlem ekler; sağ panelde parametreler. Sürükle-bırak ile sıra değişir. |
-| **4 Simülasyon** | Makine modelinde oynatma, NC satırıyla senkron; Verify ve çarpışma sonuçları. |
-| **5 NC kod** | Özet (program no, satır sayısı, çevrim süresi), kontrol sonucu ve **NC kodunu indir**. Hata, çarpışma ya da fazla kesim varsa indirme kilitlidir. Kurulum föyü buradan da açılır. |
+| **Üst çubuk** | **Aç ▾** (yeni parça, 3D parça aç: STEP/OBJ, çizim yap, G kodu ile simülasyon, boş G-kod programı, kayıtlı proje) · **Kaydet** · ortada durum · **İşlem ekle** · **NC kodu** (kontrol özeti + indir) · **⚙ Ayarlar** · **?** yardım turu. |
+| **Sol: kartlar** | **Parça kartı** (boy, çap, Z0, çubuk, özellikler; *Bağlama* düğmesi) · **Takımlar** kartı · **$1 Ana iş mili** ve **$2 Karşı iş mili** işlem kartları. Bir karta tıklayınca ayarları kartın içinde açılır. Kartlar sürüklenerek sıralanır, anahtarla açılıp kapanır, ◉ ile takım yolu gizlenir. |
+| **Orta: grafik** | **3D** (makine iç yapısı açık, dış kaporta kapalı; *Görünüm ▾* menüsünden değişir) veya **2D** XZ kesit (stok, hedef profil, takım yolları, gerçek kesici uç silueti). Kısayol `2` / `3`. Altta oynatma çubuğu. |
+| **Sağ: G-kod** | Oynayan satır vurgulanır. Kod elle yazılır, kopyalanır, yapıştırılır; yazdıkça hareket çizilir, **Enter / Insert (EOB)** satırı oynatır. Sekmeler: Uyarılar, Zamanlama, Kontrol (Verify). |
 
-**Basit / Uzman modu** (sağ üst): Basit modda şerit, ek görünüm açıları, takım listesi ve makine ayrıntıları gizlenir; Uzman modda Mastercam benzeri işlem şeridi, bütün görünüm seçenekleri ve Z0 için sayısal alan açılır. Seçim tarayıcıda hatırlanır.
+### Öne çıkanlar
+
+- **Kaba otomatik** (sol menü): seçilen malzeme ve takıma göre değerler önerilir.
+  - Girilenler: malzeme, takım, en fazla paso, ilerleme, Vc ve G50 devir sınırı, finiş payları.
+  - Ekranda: devir, ilerleme hızı, talaş hacmi ve teorik Ra.
+  - **Erişim analizi:** elmasın uç açısıyla erişemediği bölgeler profilde kırmızı gösterilir. Taretteki takımlar "erişir / erişemez" diye listelenir; ikinci takım kalan bölgeleri işler (kaba işlem Z aralığı) ya da kanal takımı önerilir.
+- **Senkron alma** ($1 ile $2 listeleri arasında): kesmeden önce karşı iş mili ana mil eksenine hizalanır ve aynı devirde senkronlanır.
+  - Tutma boyu ya da parça sıfırına göre yanaşma Z'si sorulur; hızlı yaklaşma boşluğu, yaklaşma ilerlemesi ve pens beklemesi de ayarlanır.
+  - Sonuç "Karşı iş miline al" işlemi olarak eklenir.
+- **Takımlar** (üst çubuk):
+  - **Kartlar:** T01, T02… kare kartlar; kapakta takımın 3D görseli, önden bakışla.
+  - **Ayrıntı:** karta girince Genel, Kesici uç (elmas), Ölçüler, Kesme değerleri, Montaj ve 3D model bölümleri.
+  - **Katalog:** "+ Yeni takım" ile her kategoriden (dış tornalama tutucuları SVJCR/SDJCR/SCLCR/STGCR/MWLNR/SRDCN, kanal, kesme, diş, tahrikli freze/matkap/kılavuz, kovan matkap/punta/kılavuz, karşı mil) en az 5 tip.
+  - **Elmaslar:** her uç tipinden 5 yaygın ISO elmas; katere uyan elmaslar tıklanarak takılır.
+  - **Talaş kırıcı:** F / M / R / W.
+- **Kesici uç seçim kuralları** (Sandvik Coromant):
+  - Köşe açısı: dayanım ile erişim arasındaki denge.
+  - Paso: kesme kenarı boyunun uç tipine göre bir oranı (V 1/4, D 1/2, C 2/3).
+  - Burun radyüsü: rε ≤ ap; ilerleme f ≤ 0.5·rε ve geometri aralığı içinde.
+  - Pozitif / negatif uç ayrımı.
+  - Teorik yüzey: Ra ≈ f²/(32·rε); silici uçta yaklaşık yarısı.
+- **Kater modelleri:** talaş kırıcılı, vida delikli uç ve oturma yatağı, pahlı tutucu başı.
+  - Pozitif uç: Torx vida.
+  - Negatif uç: kol pimi ve üst pabuç.
+  - Yuvarlak uç: dar boyunlu tutucu.
+- **İşlem başına iş mili:** sabit kesme hızı (G96 + G50 sınırı) ya da sabit devir (G97).
+- **Çizim yap:**
+  - **Delik aracı:** ön ya da arka alından içeri sürükleyince eksenel delik oluşur.
+  - **Çiz aracıyla delik:** dış hat arka alına çizildikten sonra parçanın içinde öne doğru geri atılan noktalar arka alından kademeli ya da boydan delik olur.
+  - Ölçü yazısına tıklayınca değer yerinde değiştirilir; Esc yalnız çizim aracını bırakır.
+  - Ø20 (makine sınırı) aşılamaz.
+- **G-koddan parça:** yapıştırılan ya da açılan program sonuna kadar simüle edilir. Kalan malzemenin dış profili ve eksenel delikleri bitmiş parça olarak çizilir ("Parça çıkar" düğmesi de var). Bu parçada fazla kesim karşılaştırması yapılmaz, çünkü hedef kodun kendi sonucudur.
+- **Sıfırdan G-kod yaz:** stok çapı ve malzeme sorulur, işlem listesi boş başlar, 3D'de o çapta çubuk oluşur.
+- **Yeni parça:** işlem planı kendiliğinden kurulmaz; plan düğmeyle oluşturulur.
+- **Malzeme** (üst çubuk): kesme değeri önerileri buna göre yapılır. Seçenekler: otomat çeliği, C45, 42CrMo4, paslanmaz, pirinç, alüminyum, titanyum, plastik.
+- **Parça / stok renkleri:**
+  - Bitmiş ölçüye (±0.03 mm) ulaşan yüzey mavi, işlenmemiş stok gri, fazla kesim kırmızı.
+  - İstenmeyen temasta (tutucu ya da gövde parçaya girerse) girdiği kadar malzeme kesilir ve kırmızı gösterilir.
+- **Çarpışma ve bindirme** (Ayarlar): tutucu–parça ve gövde–gövde güvenlik mesafesi, burç / karşı mil / arka ünite kontrolleri, G0 bindirme toleransı, çarpışma kesiği. Ayarlar projeyle kaydedilir; ihlal NC indirmeyi kilitler.
+- **3D görünüm:**
+  - Mat, kenar çizgili (SolidWorks tarzı) ve gölgesiz.
+  - Makine iç yapısı açık; dış kaporta ve takım tutma blokları gizlenebilir.
+  - Görünüm geçişleri animasyonlu; "Ön" görünüm parçanın görünen kısmına yakınlaşır.
+- **Arayüz:**
+  - Açık / koyu tema.
+  - İşlem ayarları sol menünün yanında mini pencerede açılır.
+  - Telefonda kabaca kullanılabilir.
+
+**Yardım turu (?):** ekranın bölümlerini iş sırasıyla (parçayı aç → parça → takımlar → işlemler → simülasyon → G-kod → NC kodu → ayarlar) açıklama balonlarıyla anlatır; *İleri / Geri*, klavyede ← → ve Esc.
+
+**Ayarlar (⚙):** kategoriler ve arama kutusu. Seçimler tarayıcıda saklanır.
+
+| Kategori | Ayarlar |
+|---|---|
+| Görünüm | açılış grafiği (3D/2D), makine iç yapısı, dış kaporta, takımlar, takım yolu, hedef parça, eksen okları, renk açıklaması, DRO, soğutma efekti, arka plan |
+| Simülasyon | varsayılan hız, Verify renkleri, otomatik Verify/çarpışma kontrolü, çarpışmada durdur, G-kod satırını takip |
+| G-kod editörü | panel, canlı önizleme, Enter/Insert = EOB, yazı boyutu, renkli kod |
+| Arayüz | yazı/düğme boyutu, uzman seçenekleri, açılışta başlangıç ekranı, silmede onay, durum çubuğu, ayarları sıfırla |
+| Post ve makine | post-processor / M kodları / eksen limitleri penceresi, kurulum föyü |
+| Kısayollar | bütün klavye kısayolları |
+
+**Çizim yap:** parçanın üst dış hattı 2D çizilir; ön yüz solda, Z sağa doğru ilerler, iki uç eksene kendiliğinden kapanır.
+
+- **Araçlar:** Çiz, Düzenle (sürükle), Pah, Radyüs, Sil.
+- **Yakalama:** ızgara, dik açı ve diğer köşelerle hiza; Shift basılıyken serbest.
+- **Düzenleme:** geri al / yinele (Ctrl+Z / Ctrl+Y); bütün köşeler sağdaki tablodan sayıyla düzenlenir.
+- **Denetim:** geriye giden nokta (alttan kesme), boş çizim ve sıfır çap anında uyarılır.
+- **Sonrası:** *Parçayı oluştur* kurulum penceresine (ön yüz, Z0, çubuk) geçer. Parça kartındaki *Çizimi düzenle* sonradan değiştirir.
+
+**Kesici uç (elmas) tipi:** tornalama takımında ISO şekli seçilir (C 80°, D 55°, V 35°, K 55° paralelkenar, T 60° üçgen, W 80° trigon, S 90° kare, R yuvarlak) ya da ISO kodu yazılır.
+
+- Örnek kodlar: `VCMT 110304`, `DCGT 11T302`, `CNMG 120408`.
+- Koddan şekil, kenar boyu, burun radyüsü ve serbest açı okunur.
+- Uç açısı kaba tornalamada geri açı sınırına girer.
+- 3D ve 2D'de uç gerçek şekliyle çizilir.
+
+İlk açılışta ya da **Yeni** ile başlangıç ekranı gelir: *3D parça aç*, *Çizim yap*, *G kodu ile simülasyon*, *Örnek parçayla dene*, *Kayıtlı projeyi aç*. Parça açılınca kurulum penceresi gelir:
+
+- **Torna ekseni:** otomatik ya da silindirik yüze tıklayarak.
+- **Ön yüz:** yeşil halka ön, turuncu halka arka (kesme) tarafıdır; *Ön ve arkayı değiştir* ile çevrilir.
+- **Referans noktası (Z0 X0):** ön alın merkezi, arka alın merkezi, modelden seç veya mm değeri.
+- **Çubuk ve özellikler:** önerilen standart çap ve tanınan özelliklerin seçimi.
+
+**OBJ:** B-rep yüzü olmadığı için üçgen ağı yüzlere ayrılır: önce düzlemsel parçalar, sonra bir silindir modeline (eksen, merkez, yarıçap) uyan komşu parçalar birleştirilir. Birim mm kabul edilir. Test parçalarında STEP ile aynı boy, çap ve özellikler çıkar (`tests/obj.test.js`).
+
+**Elle yazılan kod:** Simülasyon, çarpışma ve Verify aynen çalışır. Verify karşılaştırması o anki parçaya göre yapılır; başka bir parçanın programı açıldıysa "fazla kesim" uyarısı beklenir. İşlem listesinde bir değişiklik yapılırsa kod CAM çıktısıyla yenilenir.
+
+**Uzman seçenekleri** (*Ayarlar → Arayüz*): makine kartı ve ek parametreler açılır.
 
 Ayrıntılı paneller:
 
@@ -108,7 +192,9 @@ Kısayollar:
 
 ## 3D görünüm
 
-- **Makine modeli:** Star SB-20R Type G ürün fotoğrafı ve kinematik şemasına göre çizildi.
+CAM grafiği gibi mat gölgelendirme (parlama ve yansıma yok), gri-mavi geçişli arka plan ve kamera yönünden aydınlatma kullanılır. Varsayılan olarak makinenin iç yapısı görünür, dış kaporta gizlidir.
+
+- **Makine modeli** (*Görünüm → Makine iç yapısı / Dış kaporta*): Star SB-20R Type G ürün fotoğrafı ve kinematik şemasına göre çizildi.
   - Kabin: gri kabin, mavi kule, FANUC paneli (ekranda canlı eksen konumları), pencereli kapı.
   - Gang takımları: tornalama takımları 1–6, sağda +X1/±Y1 etiketli çapraz tahrikli blok (11–14), tornalama takımlarının altında turuncu hortumlu kovan takımları (21–24).
   - İnce konik kılavuz burç ucu.
@@ -118,10 +204,11 @@ Kısayollar:
 
   | Seçenek | Değerler |
   |---|---|
-  | Kabin | Tam / Ön kapaklar yok / Gizli |
+  | Makine iç yapısı | Burç sütunu, kayar başlık, kızaklar, ünite gövdeleri (varsayılan açık) |
+  | Dış kaporta | Kabin sacı ve kapılar (varsayılan kapalı) |
   | Eksenler | Kırmızı X1, Y1, Z1, C1, X2, Z2, C2 okları ve yanlarında makine koordinatı |
   | Takım yolu | Tümü / Aktif işlem / Seçili işlem / Gizli. Ağaçta her işlemin yanındaki göz düğmesi o işlemin yolunu gizler. |
-  | Takımlar | Aktif + saydam / Yalnız aktif / Tümü. Kovan bloğu, kovan takımı kullanılmıyorken saydam görünür. |
+  | Takımlar | Yalnız aktif (varsayılan) / Aktif + saydam / Tümü. Kovan bloğu, kovan takımı kullanılmıyorken saydam görünür. |
 
 - **Koordinat paneli:** Her eksen için Mutlak (program), Makine ve Kalan (satır sonuna kalan mesafe) değerlerini gösterir.
 
@@ -191,7 +278,7 @@ src/machine   makine tanımı (sb20r-g.json)
 src/post      FANUC/Star post-processor + M kodu profili
 src/ops       işlem üreteçleri, iki kanallı program kurucu (senkron, segmentasyon, örtüşen çevrim)
 src/geom      profil örnekleme, uç radyüsü telafisi, yay uydurma, tek çizgili yazı tipi
-src/cad       STEP okuma (OpenCascade WASM), bağlama, özellik tanıma
+src/cad       STEP (OpenCascade WASM) ve OBJ okuma, bağlama, özellik tanıma
 src/tools     takım kütüphanesi, kesme verisi, takım geometrisi (3D model ve çarpışmada ortak)
 src/sim       G-kod yorumlayıcı, kanal senkronu, stok simülasyonu, çarpışma gövdeleri ve kontrolü, Verify
 src/view3d    3D makine, kabin, takım modelleri, stok ağı, takım yolu

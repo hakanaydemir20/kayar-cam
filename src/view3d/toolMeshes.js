@@ -2,6 +2,7 @@
 // gövde +Y yönünde uzanır (takım -Y yönüne bakar). Makine modeli yönlendirir.
 import * as THREE from 'three';
 import { sleeveSpan } from '../tools/toolGeom.js';
+import { insertOutline, insertShapeOf } from '../tools/toolLibrary.js';
 import { mat } from './materials.js';
 
 const DEG = Math.PI / 180;
@@ -69,48 +70,75 @@ function erNut(y0, size = 'ER16') {
   return g;
 }
 
-/** Tornalama kateri: eşkenar dörtgen uç (VCMT 35° / DCMT 55°), □12 sap */
+/** Tornalama kateri (görseldeki gibi): talaş kırıcılı, vida delikli ISO uç; ucun altında oturma yatağı,
+ *  arkasında pahlı tutucu başı, Torx sıkma vidası ve □12 sap. Hayali uç orijinde, gövde +y. */
 function turningTool(t) {
   const g = new THREE.Group();
-  const rn = Math.max(t.noseR || 0.2, 0.05);
-  const ang = (t.insertAngle || 35) * DEG;
-  const edge = 11;
-  const e1 = [Math.cos(87 * DEG), Math.sin(87 * DEG)];          // ana kesme kenarı (−x tarafı, 93° yaklaşma)
-  const e2 = [Math.cos(87 * DEG - ang), Math.sin(87 * DEG - ang)]; // arka kenar
-  const sh = new THREE.Shape();
-  // burun radyüslü dörtgen
-  const c = [rn * (e1[0] + e2[0]) / Math.sin(ang) * Math.sin(ang / 2) / Math.cos(ang / 2) * 0, 0];
-  const bis = Math.atan2(e1[1] + e2[1], e1[0] + e2[0]);
-  const dc = rn / Math.sin(ang / 2);
-  const cx = Math.cos(bis) * dc, cy = Math.sin(bis) * dc;
-  const a1 = Math.atan2(e1[1], e1[0]) + Math.PI / 2, a2 = Math.atan2(e2[1], e2[0]) - Math.PI / 2;
-  sh.moveTo(cx + rn * Math.cos(a2), cy + rn * Math.sin(a2));
-  sh.absarc(cx, cy, rn, a2, a1, true);
-  const v1 = [e1[0] * edge, e1[1] * edge], v3 = [e2[0] * edge, e2[1] * edge];
-  sh.lineTo(v1[0], v1[1]);
-  sh.lineTo(v1[0] + v3[0], v1[1] + v3[1]);
-  sh.lineTo(v3[0], v3[1]);
-  sh.closePath();
-  void c;
-  const ig = new THREE.ExtrudeGeometry(sh, { depth: 3.18, bevelEnabled: true, bevelThickness: 0.15, bevelSize: 0.15, bevelSegments: 1 });
-  ig.translate(0, -cy + rn, -1.59);
-  // burun teğet noktası orijinde olsun: uç noktası (rn ile) en alt nokta
-  const insert = new THREE.Mesh(ig, mat('tin'));
-  // uç yeri y=0 (alt), x=0 (−x yan) — hayali uç
+  const pts = insertOutline(t);
+  const W = Math.max(...pts.map(p => p[0])), H = Math.max(...pts.map(p => p[1]));
+  const c = pts.reduce((s2, p) => [s2[0] + p[0] / pts.length, s2[1] + p[1] / pts.length], [0, 0]);
+  // iç teğet daire ≈ merkeze en yakın kenar uzaklığı (vida deliği ve talaş kırıcı bunun içinde)
+  let rin = Infinity;
+  for (let i = 0; i < pts.length; i++) {
+    const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length];
+    const L = Math.hypot(x2 - x1, y2 - y1) || 1;
+    rin = Math.min(rin, Math.abs((x2 - x1) * (y1 - c[1]) - (x1 - c[0]) * (y2 - y1)) / L);
+  }
+  const hole = Math.max(0.6, Math.min(1.7, rin * 0.38));
+  const shape = new THREE.Shape(); pts.forEach(([x, y], i) => (i ? shape.lineTo(x, y) : shape.moveTo(x, y))); shape.closePath();
+  const hp = new THREE.Path(); hp.absarc(c[0], c[1], hole, 0, Math.PI * 2, true); shape.holes.push(hp);
+  const T = 3.18;
+  const ig = new THREE.ExtrudeGeometry(shape, { depth: T - 0.3, bevelEnabled: true, bevelThickness: 0.15, bevelSize: 0.15, bevelSegments: 1, curveSegments: 24 });
+  ig.translate(0, 0, -T / 2 + 0.15);
   ig.computeBoundingBox();
-  const bb = ig.boundingBox;
-  insert.position.set(-bb.min.x, -bb.min.y, 0);
-  g.add(insert);
-  // vida
-  const screw = cyl(1.6, 1.0, 'blackOx', 0, 16);
-  screw.rotation.x = Math.PI / 2;
-  screw.position.set(insert.position.x + v3[0] * 0.55 + v1[0] * 0.2, insert.position.y + 4.5, 1.7);
-  g.add(screw);
-  // tutucu başı + sap
-  const head = box(14, 10, 12, 'blackOx', 7.5, 10.5, 0);   // baş, uç düzleminin gerisine (burç tarafına) taşmaz
-  g.add(head);
-  const shank = box(12, 80, 12, 'blackOx', 7, 55, 0);
-  g.add(shank);
+  const off = [-ig.boundingBox.min.x, -ig.boundingBox.min.y];   // hayali uç orijinde (pah payı dahil)
+  const ins = new THREE.Group(); ins.position.set(off[0], off[1], 0); g.add(ins);
+  ins.add(new THREE.Mesh(ig, mat('tin')));
+  // üst yüz çizgileri: talaş kırıcı oluğu (kenara paralel iç hat) ve vida havşası
+  const lineM = new THREE.LineBasicMaterial({ color: 0x3a2a08 });
+  const zTop = T / 2 + 0.16;
+  const loop = (k) => { const q = pts.map(([x, y]) => new THREE.Vector3(c[0] + (x - c[0]) * k, c[1] + (y - c[1]) * k, zTop)); q.push(q[0].clone()); return new THREE.Line(new THREE.BufferGeometry().setFromPoints(q), lineM); };
+  ins.add(loop(0.84), loop(0.72));
+  const ring = []; for (let i = 0; i <= 40; i++) { const a = i / 40 * Math.PI * 2; ring.push(new THREE.Vector3(c[0] + (hole + 0.55) * Math.cos(a), c[1] + (hole + 0.55) * Math.sin(a), zTop)); }
+  ins.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(ring), lineM));
+  const neg = /^[CDVTWSRK]N/i.test(String(t.insertCode || '').replace(/\s/g, ''));
+  if (neg) {
+    // negatif uç (görseldeki 1. ve 4. tutucu): kol pimi delikte, üstten pabuçlu baskı ucun arka köşesine basar
+    const pin = new THREE.Mesh(new THREE.CylinderGeometry(hole * 0.8, hole * 0.8, T + 0.6, 16), mat('steel'));
+    pin.rotation.x = Math.PI / 2; pin.position.set(c[0], c[1], -0.1); ins.add(pin);
+    const far = pts.reduce((m, p) => (Math.hypot(p[0], p[1]) > Math.hypot(m[0], m[1]) ? p : m), pts[0]);
+    const cl = new THREE.Mesh(new THREE.BoxGeometry(Math.max(3, rin * 1.1), 2.6, 1.6), mat('blackOx'));
+    cl.position.set((c[0] + far[0]) / 2, (c[1] + far[1]) / 2, T / 2 + 0.8); cl.rotation.z = Math.atan2(far[1] - c[1], far[0] - c[0]); ins.add(cl);
+    const cs = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 1.2, 12), mat('steel'));
+    cs.rotation.x = Math.PI / 2; cs.position.set(cl.position.x, cl.position.y, T / 2 + 1.7); ins.add(cs);
+  } else {
+    // pozitif uç (görseldeki 2. ve 3. tutucu): Torx sıkma vidası deliğin içinde, başı yüzeyin hafif altında
+    const sc = new THREE.Mesh(new THREE.CylinderGeometry(hole * 0.92, hole * 0.92, T + 0.4, 20), mat('blackOx'));
+    sc.rotation.x = Math.PI / 2; sc.position.set(c[0], c[1], -0.2); ins.add(sc);
+    const tx = new THREE.Mesh(new THREE.CylinderGeometry(hole * 0.42, hole * 0.42, 0.3, 6), mat('carbide'));
+    tx.rotation.x = Math.PI / 2; tx.position.set(c[0], c[1], T / 2 - 0.05); ins.add(tx);
+  }
+  // oturma yatağı: ucun altında (arka yüzde) biraz taşan plaka
+  const seat = new THREE.Shape(); pts.forEach(([x, y], i) => { const X = c[0] + (x - c[0]) * 1.08, Y = c[1] + (y - c[1]) * 1.08 + 0.4; i ? seat.lineTo(X, Y) : seat.moveTo(X, Y); }); seat.closePath();
+  const sg = new THREE.ExtrudeGeometry(seat, { depth: 4.2, bevelEnabled: false });
+  sg.translate(off[0], off[1], -6);
+  g.add(new THREE.Mesh(sg, mat('blackOx')));
+  // tutucu başı: ucun arkasında (y > uç), alt kenarı pahlı; uç yüzünü kapatmaz
+  const round = insertShapeOf(t) === 'R';
+  const yb = off[1] + H * 0.62, xr = round ? Math.min(13, off[0] + W + 0.6) : Math.max(13, off[0] + W + 0.6);
+  const head = new THREE.Shape();
+  if (round) {
+    // yuvarlak uç (görseldeki 3. tutucu): dar boyun, sap genişliğine eğimli geçiş
+    head.moveTo(1, 26); head.lineTo(13, 26); head.lineTo(13, yb + 10); head.lineTo(off[0] + W * 0.85, yb + 2); head.lineTo(off[0] + W * 0.85, yb); head.lineTo(off[0] + W * 0.15, yb); head.lineTo(1, off[1] + H + 1.2); head.closePath();
+  } else {
+    head.moveTo(1, 26); head.lineTo(13, 26); head.lineTo(13, yb + 6); head.lineTo(xr, yb + 2.5); head.lineTo(xr, yb); head.lineTo(off[0] + W * 0.55, yb);
+    head.lineTo(off[0] + W * 0.25, off[1] + H * 0.9); head.lineTo(1, off[1] + H + 1.2); head.closePath();
+  }
+  const hg = new THREE.ExtrudeGeometry(head, { depth: 12, bevelEnabled: true, bevelThickness: 0.4, bevelSize: 0.4, bevelSegments: 1 });
+  hg.translate(0, 0, -6);
+  g.add(new THREE.Mesh(hg, mat('blackOx')));
+  // sap □12 (baştan yukarı) + sap üstünde baş–sap geçiş çizgisi (görseldeki gibi)
+  g.add(box(12, 69, 12, 'blackOx', 7, 26 + 34.5, 0));   // üst uç y=95: çarpışma gövdesiyle aynı (toolGeom)
   return g;
 }
 
