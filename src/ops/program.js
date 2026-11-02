@@ -44,6 +44,12 @@ export function buildProgram(project) {
   const zNeed = ctx.L + ctx.backStock + ctx.cutW + ext;   // ext ≤ 0
   if (zNeed > project.machine.axes.Z1.max) errors.push({ msg: `Parça (${ctx.L} mm) + kesme Z1 stroku ${project.machine.axes.Z1.max} mm'yi aşıyor: ${mids.length ? 'ara bağlama geri çekmelerini artırın' : '"Ara Bağlama" işlemi ekleyin'} (gereken ${r3(zNeed - project.machine.axes.Z1.max)} mm daha)` });
 
+  // burçsuz (N.G.B.): parça pensten çıkıntılı işlenir — katalog sınırı çap × 2.5, en çok 50 mm
+  if (project.machine.guideBush === false) {
+    const lim = Math.min(50, 2.5 * project.stock.barDia);
+    if (ctx.L > lim + 1e-6) errors.push({ msg: `Burçsuz çalışmada parça boyu en çok ${r3g(lim)} mm (çubuk Ø${project.stock.barDia} × 2.5, en çok 50): parça ${ctx.L} mm. Makine ayarlarından kılavuz burçlu çalışmayı seçin.` });
+    if (mids.length) errors.push({ op: mids[0].id, msg: 'Ara bağlama yalnız kılavuz burçlu çalışmada kullanılır' });
+  }
   const runSub = (op, extra) => {
     const mark = p2.items.length;
     try { p2.opStart(op); GEN.midRechuckSub(p2, ctx, op, null, extra); p2.opEnd(op); }
@@ -54,7 +60,13 @@ export function buildProgram(project) {
     let tool = null;
     if (def.tools.length) {
       tool = findTool(project.tools, op.toolId);
-      if (!tool) { errors.push({ op: op.id, msg: `${op.name}: takım seçilmedi` }); return; }
+      if (!tool) {
+        const f = op.params.featureId && project.part.features.find(x => x.id === op.params.featureId);
+        const need = f?.dia ? ` — tarette Ø${f.dia} ${OP_TYPES[op.type]?.tools?.includes('drill') || OP_TYPES[op.type]?.tools?.includes('ldrill') ? 'matkap' : 'takım'} yok; Takımlar → “+ Yeni takım” ile ekleyip işlemde seçin` : ' — işlem ayarlarından bir takım seçin';
+        // eksik matkap: arayüz tek tıkla tarete takabilsin
+        const NEED = { drill: ['drill', 'front'], crossDrill: ['ldrill', 'cross'], backDrill: ['drill', 'back'] }[op.type];
+        errors.push({ op: op.id, msg: `${op.name}: takım seçilmedi${need}`, ...(f?.dia && NEED ? { need: { type: NEED[0], unit: NEED[1], dia: f.dia } } : {}) }); return;
+      }
       if (!def.tools.includes(tool.type)) { errors.push({ op: op.id, msg: `${op.name}: ${tool.name} bu işleme uygun değil` }); return; }
       if (tool.channel !== def.channel) { errors.push({ op: op.id, msg: `${op.name}: ${tool.name} ${def.channel}. kanalda değil` }); return; }
     }
@@ -69,18 +81,42 @@ export function buildProgram(project) {
     }
   };
 
+  // kapalı işlemler: kodu blok atlama (/) ile yazılır — makinede BLOCK SKIP açıkken okunmaz, kapatılınca çalışır.
+  // Yapısal işlemler (parça alma, kesme, atma, çubuk ilerletme, ara bağlama) bekleme kodu içerdiği için yazılmaz.
+  const STRUCT = ['pickoff', 'cutoff', 'eject', 'rechuck', 'midRechuck'];
+  const order = (o) => project.ops.indexOf(o);
+  const offsOf = (ch) => project.ops.filter(o => !o.enabled && OP_TYPES[o.type].channel === ch && !STRUCT.includes(o.type));
+  const runOff = (prog, op) => {
+    const def = OP_TYPES[op.type];
+    const tool = def.tools.length ? findTool(project.tools, op.toolId) : null;
+    const head = () => { prog.skip(true); prog.opStart({ id: op.id, name: op.name + ' - KAPALI (BLOK ATLAMA)' }); };
+    const mark = prog.items.length;
+    head();
+    try {
+      if (def.tools.length && (!tool || !def.tools.includes(tool.type) || tool.channel !== def.channel)) throw new Error('takım yok');
+      GEN[op.type](prog, ctx, op, tool, null);
+    } catch {
+      prog.items.length = mark; head(); prog.comment('KAPALI ISLEM - KOD URETILEMEDI');
+    }
+    prog.opEnd(op); prog.skip(false);
+  };
+  const off1 = offsOf(1);
+  const flush1 = (before) => { while (off1.length && order(off1[0]) < before) runOff(p1, off1.shift()); };
+
   // ---- $1 ----
   ctx.extZ = 0;
   if (mids.length) p1.workShift(0);   // yarıda kalmış çevrimden kalan kaydırmayı temizle
   const ch1 = ops.filter(o => OP_TYPES[o.type].channel === 1 && o.type !== 'rechuck');
   const seq = segmentSequence(project, ctx, ch1, warnings);
   for (const { op, extra } of seq) {
+    flush1(op.type === 'cutoff' ? Infinity : order(op));
     if (op.type === 'cutoff') {
       if (seq[seq.length - 1].op !== op) warnings.push({ op: op.id, msg: 'Kesmeden sonra gelen ön işlemler kesmeden önce yapılacak şekilde sıralanmalı' });
       run(p1, op, pick ? { pick: true, ...W } : null);
     } else if (op.type === 'midRechuck') run(p1, op, midW.get(op.id));
     else run(p1, op, extra);
   }
+  flush1(Infinity);
   const re = ops.find(o => o.type === 'rechuck');
   if (re) run(p1, re);
   if (project.post.codes.partCount) p1.m('partCount');   // parça sayacı (tanımlıysa)
@@ -100,12 +136,19 @@ export function buildProgram(project) {
     if (!back.some(o => o.type === 'eject')) errors.push({ op: pick.id, msg: 'Örtüşen çevrimde parça atma işlemi zorunlu (önceki parça bırakılmadan yeni parça alınamaz)' });
     p2.comment('ORTUSEN CEVRIM: ONCEKI PARCANIN ARKA ISLEMLERI');
     p2.comment('ILK CEVRIMDE KARSI IS MILI BOS - ILK PARCA ARKA ISLEMSIZ CIKAR');
-    for (const op of back) run(p2, op);
+    const off2 = pick ? offsOf(2) : [];
+    for (const op of back) { while (off2.length && order(off2[0]) < order(op)) runOff(p2, off2.shift()); run(p2, op); }
+    off2.forEach(o => runOff(p2, o));
     run(p2, pick, { ...W, rpm: cutRpm });
   } else {
     for (const m of mids) runSub(m, midW.get(m.id));
     if (pick) run(p2, pick, { ...W, rpm: cutRpm });
-    if (pick) for (const op of back) run(p2, op);
+    if (pick) {
+      const off2 = offsOf(2);
+      // parça atmadan önce bütün kalan kapalı arka işlemler
+      for (const op of back) { while (off2.length && (op.type === 'eject' || order(off2[0]) < order(op))) runOff(p2, off2.shift()); run(p2, op); }
+      off2.forEach(o => runOff(p2, o));
+    }
   }
   if (cut && ctx.backStock > 0 && !ops.some(o => o.type === 'backTurn')) errors.push({ op: cut.id, msg: `Arka alın payı ${ctx.backStock} mm bırakılıyor ama Arka Tornalama işlemi yok` });
   if (pick && !ops.some(o => o.type === 'eject')) warnings.push({ op: pick.id, msg: 'Parça atma işlemi yok: parça karşı iş milinde kalır' });

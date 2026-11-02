@@ -260,8 +260,10 @@ export function recognizeFeatures(model, fx, faces, profile) {
       const h = cq[1] * np[1] + cq[2] * np[2];
       const ds = f.pts.map(p => toPart(fx, p)[0]);
       const z0 = Math.min(...ds), z1 = Math.max(...ds);
+      // yerel yarıçap düzlüğün içinden örneklenir (uçtaki flanş/omuz yarıçapı sayılmaz)
       let Rl = 0;
-      for (let z = z0; z <= z1; z += 0.05) Rl = Math.max(Rl, Rat(z));
+      const e = Math.min(0.1, (z1 - z0) / 4);
+      for (let z = z0 + e; z <= z1 - e + 1e-9; z += 0.05) Rl = Math.max(Rl, Rat(z));
       if (h < Rl - 0.02 && h > 0) {
         const ang = Math.atan2(np[2], np[1]) * 180 / Math.PI;
         feats.push({ id: id(), type: 'flat', c: round(normAng(-ang)), depth: round(Rl - h), z0: round(z0), z1: round(z1), _h: h });
@@ -278,7 +280,7 @@ function groupPolygons(feats, id) {
   const out = feats.filter(f => f.type !== 'flat');
   for (const f of flats) {
     if (used.has(f)) continue;
-    const g = flats.filter(o => !used.has(o) && Math.abs(o._h - f._h) < 0.01 && Math.abs(o.z0 - f.z0) < 0.05 && Math.abs(o.z1 - f.z1) < 0.05);
+    const g = flats.filter(o => !used.has(o) && Math.abs(o._h - f._h) < 0.03 && Math.abs(o.z0 - f.z0) < 0.05 && Math.abs(o.z1 - f.z1) < 0.05);
     const n = g.length;
     const angs = g.map(o => o.c).sort((a, b) => a - b);
     const even = n >= 3 && angs.every((a, k) => Math.abs(((angs[(k + 1) % n] - a + 360) % 360 || 360) - 360 / n) < 0.5);

@@ -26,6 +26,8 @@ export function parseProgram(text) {
 }
 
 export function parseLine(src) {
+  // blok atlama (/ ile başlayan satır): BLOCK SKIP açıkken makine okumaz — simülasyon da atlar
+  if (/^\s*\//.test(src)) return { src, words: [], comment: '', errors: [], skip: true };
   let comment = '';
   let s = src.replace(/\(([^)]*)\)/g, (_, c) => { comment += (comment ? ' ' : '') + c; return ' '; });
   const semi = s.indexOf(';');

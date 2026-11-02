@@ -1,6 +1,7 @@
 // Parça kurulum önizlemesi: yalnız parça, torna ekseni, ön/arka uç işaretleri ve referans (Z0 X0) üçlüsü.
 // Çerçeve makineyle aynı: x = −d (ön alın x = 0, arka uç x = −L), y = yukarı (radyal), z = operatöre doğru.
 import * as THREE from 'three';
+import { sectionGeometry } from './partSection.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { toPart } from '../cad/featureRecog.js';
 
@@ -91,9 +92,7 @@ export class PartPreview {
       geo.computeVertexNormals();
       this.meshKind = 'step';
     } else {
-      const pts = part.profile.map(p => new THREE.Vector2(Math.max(0, p.r), -p.z));
-      geo = new THREE.LatheGeometry(pts, 120);
-      geo.rotateZ(-Math.PI / 2);
+      geo = sectionGeometry(part, 120);   // dış + iç profil (delik, iç kanal, düz dip)
       this.meshKind = 'profile';
     }
     this.mesh = new THREE.Mesh(geo, mat);

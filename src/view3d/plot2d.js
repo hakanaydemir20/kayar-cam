@@ -2,7 +2,7 @@
 // dikey = yarıçap (X/2, üst yarı gerçek, alt yarı ayna). Stok, hedef profil, takım yolları ve aktif takım çizilir.
 import { movePoint } from '../sim/interpreter.js';
 import { LAYOUT } from '../sim/frames.js';
-import { insertOutline } from '../tools/toolLibrary.js';
+import { insertOutline, toolNo } from '../tools/toolLibrary.js';
 
 const COL = { rapid: '#f59e0b', feed: '#38bdf8', arc: '#a78bfa', thread: '#34d399', stock: '#8a99a8', target: '#3ecf8e', tool: '#f472b6', back: '#c084fc' };
 
@@ -229,6 +229,6 @@ export class Plot2D {
     }
     g.restore();
     g.fillStyle = COL.tool; g.font = '600 11px Segoe UI, sans-serif';
-    g.fillText('T' + String(t.num).padStart(2, '0'), x + 8, y - 8);
+    g.fillText(toolNo(t), x + 8, y - 8);
   }
 }

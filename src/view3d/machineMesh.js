@@ -8,12 +8,14 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mat } from './materials.js';
 import { createToolMesh, isRotary } from './toolMeshes.js';
+import { toolNo } from '../tools/toolLibrary.js';
+import { buildGlbMachine } from './machineGlb.js';
 import { LAYOUT } from '../sim/frames.js';
 import { StockMesh } from './stockMesh.js';
 import { buildCabin } from './cabin.js';
 import { numberStrip, crossBlockTex, decalPlane, labelSprite } from './decals.js';
 import { poseOf } from '../sim/pose.js';
-import { bushBodies, gangBodies, subBodies, backBodies, subNut, PAN_Y } from '../sim/bodies.js';
+import { bushBodies, gangBodies, subBodies, backBodies, subNut, PAN_Y, isNGB, mainColletFace } from '../sim/bodies.js';
 
 const HEAD_K = 310;       // başlık pens alnı = parça ön alnı − HEAD_K
 const DEG = Math.PI / 180;
@@ -151,6 +153,8 @@ export class MachineModel {
   build() {
     const R = this.root, P = this.project;
     const barR = P.stock.barDia / 2;
+    // makine iç yapısı: kullanıcının makine çizimi (yüklüyse); yoksa prosedürel model
+    this.glb = buildGlbMachine(P, { ngb: isNGB(P.machine) });
     // ---- dış kabin ----
     this.cabin = buildCabin();
     R.add(this.cabin.group);
@@ -159,12 +163,16 @@ export class MachineModel {
     const I = this.inner;
     const body = this.bodyObjs = [];   // makine iç yapısı (gizlenebilir): iş milleri, burç ve takımlar dışındaki her şey; dış kabin ayrı (setCabin)
     // burç ünitesi: çarpışma kontrolüyle aynı gövdeler (ince konik uç; çapraz takım pens somunları üstünden geçer)
-    for (const bd of bushBodies()) bodyMesh(bd, I);
-    rb(-98, 80, 250, 330, -300, 250, 'starBlue', I, 10);                         // mavi üst kapak
-    cylX(56, 1.5, 'paintMid', -32, 0, 0, I, 64);                                 // burç yuvası (sütun yüzünde ince halka)
-    for (let k = 0; k < 6; k++) { const a = k * Math.PI / 3 + 0.5; boltX(I, -26, 28.5 * Math.cos(a), 28.5 * Math.sin(a), 1.8); }
+    // burçsuz (N.G.B., makine çizimindeki gibi): burç ünitesi yok, ana iş mili pensi işleme bölgesinde
+    this.ngb = isNGB(P.machine);
+    if (!this.ngb) {
+      for (const bd of bushBodies()) bodyMesh(bd, I);
+      rb(-98, 80, 250, 330, -300, 250, 'starBlue', I, 10);                       // mavi üst kapak
+      cylX(56, 1.5, 'paintMid', -32, 0, 0, I, 64);                               // burç yuvası (sütun yüzünde ince halka)
+      for (let k = 0; k < 6; k++) { const a = k * Math.PI / 3 + 0.5; boltX(I, -26, 28.5 * Math.cos(a), 28.5 * Math.sin(a), 1.8); }
+    }
     body.push(...I.children);
-    colletFace(I, LAYOUT.bushFace, 11, barR + 0.02, 1);                          // kılavuz burç (somunun önünde)
+    if (!this.ngb) colletFace(I, LAYOUT.bushFace, 11, barR + 0.02, 1);           // kılavuz burç (somunun önünde)
     const nI = I.children.length;
     // karşı iş mili ve arka ünite tablası
     rb(40, 560, PAN_Y, PAN_Y + 26, -230, 130, 'castDark', I, 5);
@@ -172,6 +180,13 @@ export class MachineModel {
     // ---- kayar başlık (Z1) — kabinin içinde, burç sütununun arkasında ----
     body.push(...I.children.slice(nI));
     this.head = new THREE.Group(); R.add(this.head);
+    if (this.glb) {
+      // çizimdeki ana iş mili: pens alnı başlık yerel x = 0 (update: başlık konumu = pens alnı)
+      for (const g of this.glb.head) this.head.add(g);
+      this.mainNose = new THREE.Group(); this.head.add(this.mainNose);
+      for (const g of this.glb.headRot) this.mainNose.add(g);
+      body.push(...this.glb.head);
+    } else {
     rbox(190, 70, 170, 'paint', -95, -68, 0, this.head, 8);                      // sürgü
     cylX(60, 165, 'paint', -175, 0, 0, this.head, 64);                           // iş mili gövdesi
     cylX(61, 8, 'starBlue', -60, 0, 0, this.head, 64);
@@ -183,6 +198,7 @@ export class MachineModel {
     for (let k = 0; k < 4; k++) { const s2 = box(10, 4, 3, 'blackOx', 31, 0, 0, this.mainNose); const a = k * Math.PI / 2; s2.position.y = 21 * Math.cos(a); s2.position.z = 21 * Math.sin(a); }
     rbox(70, 56, 80, 'starBlue', -150, 82, 0, this.head, 8);                     // iş mili motoru
     body.push(this.head.children.at(-1));
+    }
     const nR = R.children.length;
     rb(-560, -90, PAN_Y, -103, -95, 95, 'castDark', R, 5);                       // başlık yatağı (sabit)
     for (const z of [-55, 55]) rb(-550, -100, -103, -95, z - 8, z + 8, 'chrome', R, 2);
@@ -193,9 +209,16 @@ export class MachineModel {
     this.buildGang();
     this.buildSub(barR);
     this.buildBack();
+    if (this.glb) {
+      // X2/Z2 kızağı: taban sabit, X2 sürgüsü yanal
+      for (const g of this.glb.fixed) R.add(g);
+      this.x2g = new THREE.Group(); R.add(this.x2g);
+      for (const g of this.glb.x2) this.x2g.add(g);
+      body.push(...this.glb.fixed, ...this.glb.x2);
+    }
     const toolHolders = new Set([...this.tools.values()].map(v => v.holder));
     // takım tutma blokları (gang plakası blokları, çapraz blok, kovan bloğu, arka ünite gövdesi): ayrı açılır/kapanır
-    this.holderObjs = [this.gang, this.back].flatMap(G => G.children.filter(o => !toolHolders.has(o) && !(this.axisObjs || []).includes(o)));
+    this.holderObjs = this.glb ? [...this.glb.back] : [this.gang, this.back].flatMap(G => G.children.filter(o => !toolHolders.has(o) && !(this.axisObjs || []).includes(o)));
     body.push(...this.subBody);
     this.bodyObjs = body.flat();
 
@@ -241,6 +264,7 @@ export class MachineModel {
     for (const t of all) this.addTool(t, G);
     const zs = all.map(t => t.yPos);
     this.gangZ = [Math.min(...zs, 0) - 22, Math.max(...zs, 0) + 30];
+    if (this.glb) { for (const g of this.glb.gang) G.add(g); return; }
     // ünite gövdeleri: çarpışma kontrolüyle aynı liste (takım gövdeleri hariç — takımlar ayrıntılı modelle çizilir)
     for (const bd of gangBodies(P.tools)) {
       if (bd.tool || bd.spindleOf) continue;
@@ -251,7 +275,7 @@ export class MachineModel {
         continue;
       }
       const m = bodyMesh(bd, G);
-      if (bd.strip === 'front' || /Kovan bloğu kolu/.test(bd.name || '')) {
+      if (bd.strip === 'front' || /kolonu kolu/.test(bd.name || '')) {
         // kovan bloğu: kovan takımı kullanılmıyorken "aktif + saydam" modunda saydam (görüşü kapatmasın)
         m.material = m.material.clone(); (this.frontUnit ||= []).push(m.material);
       }
@@ -271,18 +295,17 @@ export class MachineModel {
         const lab = decalPlane(Math.min(64, z1 - z0 - 4), 64, crossBlockTex(nums));
         lab.rotation.y = Math.PI / 2; lab.position.set(x1 + 0.2, 88, (z0 + z1) / 2); G.add(lab);
       } else if (bd.strip === 'front') {
-        const front = all.filter(t => t.unit === 'front');
-        const [, x1, y0, y1] = bd.b;
-        for (const t of front) {
-          boltX(G, x1, (y0 + y1) / 2 + 7, t.yPos + 5, 2.6);
+        // T35 kolonu: her katta sıkma civatası, hortum ve kat numarası (35-1, 35-2 …)
+        const col = all.filter(t => t.unit === 'front' && t.yPos === bd.col);
+        const [, x1, , , z0, z1] = bd.b;
+        for (const t of col) {
+          boltX(G, x1, (t.xPos || 0) + 8, bd.col + 8, 2.4);
           const v = this.tools.get(t.id);
           v.hose = new THREE.Group(); v.holder.add(v.hose);   // hortum takım çerçevesinde (uç orijinde)
-          locLine(v.hose, [[44, 13, -6], [34, 15, -6], [22, 12, -5], [11, 7, -3.5]], t.num % 2 ? 'locline' : 'locBlue', 0.85);
+          locLine(v.hose, [[44, 13, -6], [34, 15, -6], [22, 12, -5], [11, 7, -3.5]], t.offset % 2 ? 'locline' : 'locBlue', 0.85);
+          const lab = decalPlane(z1 - z0 - 4, 9, numberStrip([toolNo(t).slice(1)], 96, 36, { bg: '#24262a', fg: '#e9ecef' }));
+          lab.rotation.y = Math.PI / 2; lab.position.set(x1 + 0.3, (t.xPos || 0) - 9, bd.col); G.add(lab);
         }
-        const fs = [...front].sort((p, q) => q.yPos - p.yPos);
-        const a = Math.min(...front.map(t => t.yPos)) - 11, b2 = Math.max(...front.map(t => t.yPos)) + 11;
-        const strip = decalPlane(b2 - a, 10, numberStrip(fs.map(t => t.num), 64 * fs.length, 48, { bg: '#24262a', fg: '#e9ecef' }));
-        strip.rotation.y = Math.PI / 2; strip.position.set(x1 + 0.3, (y0 + y1) / 2 - 7, (a + b2) / 2); G.add(strip);
       }
     }
   }
@@ -293,6 +316,12 @@ export class MachineModel {
     this.subNose = new THREE.Group(); S.add(this.subNose);
     const nut = subNut(this.project?.machine);
     this.subBody = [];
+    if (this.glb) {
+      for (const g of this.glb.sub) S.add(g);
+      for (const g of this.glb.subRot) this.subNose.add(g);
+      this.subBody.push(...this.glb.sub);
+      return;
+    }
     for (const bd of subBodies(barR, this.project?.machine)) { const m = bodyMesh(bd, bd.collet ? this.subNose : S); if (/gövde|kapa|kızak|taban/i.test(bd.name || '')) this.subBody.push(m); }
     colletFace(this.subNose, -nut.len - 0.4, Math.min(9.5, nut.r - 2), barR + 0.3, -1);
     for (let k = 0; k < 4; k++) { const s2 = box(8, 3.5, 3, 'blackOx', 4, 0, 0, this.subNose); const a = k * Math.PI / 2 + Math.PI / 4; s2.position.y = 22.6 * Math.cos(a); s2.position.z = 22.6 * Math.sin(a); }
@@ -304,6 +333,7 @@ export class MachineModel {
     this.back = new THREE.Group(); this.root.add(this.back);
     const bt = P.tools.filter(t => t.unit === 'back' || t.unit === 'rear');
     if (!bt.length) return;
+    if (this.glb) { for (const g of this.glb.back) this.back.add(g); for (const t of bt) this.addTool(t, this.back); return; }
     for (const bd of backBodies(P.tools)) if (!bd.tool) bodyMesh(bd, this.back);
     const X = LAYOUT.backToolX;
     for (const t of bt) { boltX(this.back, X - 30, 15, LAYOUT.backLat + t.yPos, 2.2); boltX(this.back, X - 30, -15, LAYOUT.backLat + t.yPos, 2.2); }
@@ -332,8 +362,10 @@ export class MachineModel {
     mk(this.gang, 'X1', [30, 150, zMax + 34], null, 80, [30, 196, zMax + 34]);
     mk(this.gang, 'Y1', [30, 150, zMax + 34], [Math.PI / 2, 0, 0], 80, [30, 150, zMax + 80]);
     // C1: burç önünde dönüş oku
-    const c1 = arrowRot(36, 0.7); c1.rotation.y = Math.PI / 2; c1.position.set(-10, 0, 0); this.inner.add(c1);
-    const c1s = labelSprite({ name: 'C1' }); c1s.position.set(-8, -44, 26); this.inner.add(c1s); this.labels.C1 = c1s;
+    // burçsuzda pens somunu Z1 ile hareket eder: ok başlıkta
+    const cP = this.ngb ? this.head : this.inner, cx = this.ngb ? 20 : -10;
+    const c1 = arrowRot(36, 0.7); c1.rotation.y = Math.PI / 2; c1.position.set(cx, 0, 0); cP.add(c1);
+    const c1s = labelSprite({ name: 'C1' }); c1s.position.set(cx + 2, -44, 26); cP.add(c1s); this.labels.C1 = c1s;
     this.axisObjs.push(c1, c1s);
     // X2 (yanal) ve Z2 (eksenel): karşı iş mili gövdesinin üstünde
     mk(this.sub, 'Z2', [180, 74, 0], [0, 0, Math.PI / 2], 110, [244, 100, 0]);
@@ -347,6 +379,11 @@ export class MachineModel {
   setBody(on) { for (const o of this.bodyObjs) o.visible = on; }
   /** Takım tutma blokları (varsayılan gizli: yalnız takımlar görünür) */
   setHolders(on) { for (const o of this.holderObjs || []) o.visible = on; }
+  /** Yalnız takımlar: kesici uç, kater, matkap, freze görünür; pens somunu, kovan ve tahrikli iş mili gövdesi gizlenir */
+  setBareTools(on) {
+    for (const v of this.tools.values()) v.holder.traverse(o => { if (o.userData.holder) o.visible = !on; });
+    for (const s of this.glb?.stations || []) s.visible = !on;
+  }
   setAxesVisible(on) { if (this.axes) for (const o of this.axisObjs) o.visible = on; }
   /** kabin: 'full' | 'cut' (ön kapaklar gizli) | 'none' */
   setCabin(mode) {
@@ -391,7 +428,7 @@ export class MachineModel {
       const bb = new THREE.Box3().setFromObject(g);
       const top = bb.max.y, h = Math.max(2, 52 - top);
       const sp = new THREE.Mesh(new THREE.CylinderGeometry(11, 12, h, 32), mat('darkSteel'));
-      sp.position.y = top + h / 2; sp.castShadow = true;
+      sp.position.y = top + h / 2; sp.castShadow = true; sp.userData.holder = true;
       holder.add(sp);
     }
     parent.add(holder);
@@ -432,7 +469,10 @@ export class MachineModel {
     this.pose1 = pose1; this.pose2 = pose2; this.m1 = m1; this.m2 = m2;
     // ana parça ön alnı (dünya x)
     const front = stockSim.mainFrontWorld(pose1.m.Z);
-    this.head.position.x = pose1.m.Z - HEAD_K;   // başlık makine Z1'inde (pens açıkken çubuktan bağımsız geri gider)
+    // başlık makine Z1'inde (pens açıkken çubuktan bağımsız geri gider); burçsuzda pens alnı parçanın hemen arkasında
+    const ss = stockSim;
+    const face = this.ngb ? mainColletFace(pose1.m.Z, ss.L, ss.bs, ss.cutW) : pose1.m.Z - HEAD_K + 36;
+    this.head.position.x = this.glb ? face : face - 36;
     this.mainHolder.position.x = front;
     this.bar.position.x = front - stockSim.stock.dMax - 450;
     // dönüş
@@ -456,6 +496,7 @@ export class MachineModel {
     const s2 = m2 ? m2.state : null;
     const subFace = pose2.m.Z, subLat = pose2.m.X;
     this.sub.position.set(subFace, 0, subLat);
+    if (this.x2g) this.x2g.position.z = subLat;
     if (s2 && s2.subCAxis) this.subNose.rotation.x = (pose2.p.C || 0) * DEG;            // C2 konumlama
     else if (s2 && s2.sub.dir !== 'stop') this.subNose.rotation.x += spinStep(m2, dt, s2.sub.dir, 'sub');
     // parça karşı iş milinde mi?
@@ -484,15 +525,15 @@ export class MachineModel {
       if (live) v.mesh.children.forEach(c => { c.rotation.y += 0.6; });
     }
     this.activeTool1 = tool1; this.activeTool2 = s2 ? s2.tool : null;
-    // takım görünürlüğü: all | ghost | active
+    // takım görünürlüğü: all | ghost | active | none
     const mode = this.toolMode || 'ghost';
     if (this.frontUnit) {
-      const a = mode === 'all' || (tool1 && tool1.unit === 'front') ? 1 : 0.22;
+      const a = mode === 'none' ? 0 : mode === 'all' || (tool1 && tool1.unit === 'front') ? 1 : 0.22;
       if (a !== this._frontAlpha) { for (const m of this.frontUnit) { m.transparent = a < 1; m.opacity = a; m.depthWrite = a === 1; m.needsUpdate = true; } this._frontAlpha = a; }
     }
     for (const [, v] of this.tools) {
       const act = v.tool === this.activeTool1 || v.tool === this.activeTool2;
-      const a = act || mode === 'all' ? 1 : mode === 'ghost' ? 0.12 : 0;
+      const a = mode === 'none' ? 0 : act || mode === 'all' ? 1 : mode === 'ghost' ? 0.12 : 0;
       v.holder.visible = a > 0;
       if (v.hose) v.hose.visible = a === 1;
       if (a !== v.alpha && a > 0) {

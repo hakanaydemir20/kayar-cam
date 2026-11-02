@@ -229,6 +229,8 @@ export class StockMesh {
       const i = this.i0 + r, x = -S.dAt(i);
       const ends = r === 0 || r === this.rows - 1;
       const nx = r < this.rows - 1 ? i + 1 : -1;
+      // satırın dış yüzeyi: komşu açılardaki en büyük yarıçap (yerel; düzlük ve çokgende de kenar burada)
+      let top = 0; for (let j = 0; j < nth; j++) top = Math.max(top, R(i, j));
       for (let j = 0; j < nth; j++) {
         const a = R(i, j), b = R(i, j + 1);
         if (a <= 1e-4 && b <= 1e-4) continue;
@@ -236,12 +238,13 @@ export class StockMesh {
         if (ends) seg(x, a, j, x, b, j + 1);
         else if (nx >= 0) {
           const c = R(nx, j), d = R(nx, j + 1);
-          if (Math.abs(a - c) > dz && Math.abs(b - d) > dz) { const xr = a > c ? x : -S.dAt(nx); seg(xr, Math.max(a, c), j, xr, Math.max(b, d), j + 1); }
+          if (Math.abs(a - c) > dz && Math.abs(b - d) > dz && Math.max(a, c) >= top - 0.05) { const xr = a > c ? x : -S.dAt(nx); seg(xr, Math.max(a, c), j, xr, Math.max(b, d), j + 1); }
         }
         // çevresel kenar (düzlük, çapraz delik ağzı): komşu açıya göre ani değişim
         const jn = (j + 1) % nth, j2 = (j + 2) % nth;
         const s1 = Math.abs(R(i, jn) - a), s2 = Math.abs(R(i, j2) - R(i, jn));
-        if (nx >= 0 && Math.abs(s2 - s1) > Math.max(a, 0.5) * dth * 0.9) seg(x, R(i, jn), jn, -S.dAt(nx), R(nx, jn), jn);
+        // yalnız dış yüzeyde (delik ağzı, düzlük/çokgen kenarı): çapraz deliğin içindeki kademelere çizgi çekilmez
+        if (nx >= 0 && Math.abs(s2 - s1) > Math.max(a, 0.5) * dth * 0.9 && R(i, jn) >= top - 0.05) seg(x, R(i, jn), jn, -S.dAt(nx), R(nx, jn), jn);
       }
       // delik ağzı / iç kademe
       const ri = S.rin[i];

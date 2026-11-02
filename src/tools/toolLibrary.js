@@ -154,7 +154,19 @@ export const TOOL_CATALOG = [
 ];
 
 /** Ünite başına takım numarası aralığı (Star yerleşimi) */
-export const UNIT_NUMS = { gang: [1, 9], cross: [11, 19], front: [21, 29], rear: [31, 39], back: [41, 49] };
+export const UNIT_NUMS = { gang: [1, 9], cross: [31, 34], front: [35, 35], rear: [41, 49], back: [21, 24] };
+
+/** İstasyon yerleşimi (makine çizimi “makine çizimi/SB20R_TypeG_machining_zone.glb” sırasıyla, gerçek tutucu ölçüleriyle):
+ *  gang plakasında yanal (Y1) sıra: T01…T06 tornalama (18 mm adım) → T31…T34 çapraz tahrikli (30 mm adım) → T35 ön delme kolonu.
+ *  T35 kolonu: 3 kat X1 yönünde alt alta (T35-1/2/3 = T3501/T3502/T3503), uçlar ana iş miline bakar.
+ *  Arka ünite T21…T24: karşı iş mili ekseni yüksekliğinde yan yana, X2 ile seçilir (30 mm adım). Arka kovan çizimde yok. */
+export const STATIONS = {
+  gang: [110, 92, 74, 56, 38, 20],
+  cross: [-10, -40, -70, -100],
+  front: { yPos: -140, xPos: [-28, -53, -78] },
+  back: [70, 100, 130, 160],   // karşı iş mili gövdesi (±50) + pens somunu dışında
+  rear: [],
+};
 
 /** Malzeme kesme verileri (karbür uç; üretici kataloglarının orta değerleri, kayar otomat küçük çaplarına göre) */
 export const MATERIALS = {
@@ -202,6 +214,14 @@ export function insertAdvice(t) {
 /** Teorik yüzey pürüzlülüğü Ra (µm) ≈ f² / (32·rε) · 1000; silici uçta yaklaşık yarısı */
 export function theoreticalRa(f, rn, wiper = false) { return (f * f) / (32 * Math.max(rn, 0.01)) * 1000 * (wiper ? 0.5 : 1); }
 
+/** Finiş önerisi: hedef Ra'dan ilerleme (f = √(Ra·32·rε/1000)), malzemeye göre Vc */
+export function suggestFinish(matKey, tool, Ra = 1.6) {
+  const M = MATERIALS[matKey] || MATERIALS.free, rn = tool?.noseR || 0.2, w = tool?.chipGeo === 'W';
+  const fRa = Math.sqrt((Ra / (w ? 0.5 : 1)) * 32 * rn / 1000);
+  const feed = Math.round(Math.max(0.02, Math.min(fRa, M.fFinish * 1.6, 0.5 * rn)) * 1000) / 1000;
+  return { feed, vc: M.vcFinish, Ra: +theoreticalRa(feed, rn, w).toFixed(2) };
+}
+
 /** Kaba tornalama önerisi: malzeme + takım (uç açısı, burun radyüsü) + çubuk çapı */
 export function suggestRough(matKey, tool, barDia, maxRpm = 8000) {
   const M = MATERIALS[matKey] || MATERIALS.free;
@@ -239,10 +259,8 @@ export function makeTool(p) {
 
 // Varsayılan takım listesi (örnek programla kesinleşecek numaralandırma)
 export function defaultTools() {
-  // Gang adımı 18 mm: Ø20 çubukta aktif takım merkezdeyken komşu takım (□12) çubuğa değmez (18−6 > 10).
-  // Yerleşim Star SB-20R Type G fotoğrafına göre (operatörden bakışla soldan sağa 1…6, sağda çapraz blok 11–14,
-  // tornalama takımlarının altında kovan takımları 24…21).
-  // yPos: gang plakasında takımın yanal konumu (Y1 ofseti, mm). Arka takımlar: arka ünitede yanal konum.
+  // Yerleşim: STATIONS (makine çizimine göre). Gang adımı 18 mm: Ø20 çubukta aktif takım merkezdeyken komşu takım (□12) çubuğa değmez.
+  // yPos: gang plakasında takımın yanal konumu (Y1 ofseti, mm); arka ünitede karşı iş milinin yanal konumu (X2).
   // xPos: takım ucunun tornalama ucu hattına göre radyal montaj konumu (mm, − = aşağı). X1 makine ofsetine girer.
   return [
     makeTool({ num: 1, name: 'Kaba Tornalama VCMT 35°', type: 'turn', unit: 'gang', insertCode: 'VCMT 110304', insertShape: 'V', insertSize: 11, noseR: 0.4, vc: 150, feed: 0.08, yPos: 110, insertAngle: 35 }),
@@ -250,22 +268,25 @@ export function defaultTools() {
     makeTool({ num: 3, name: 'Kanal 2.0 mm', type: 'groove', unit: 'gang', width: 2, noseR: 0.1, vc: 90, feed: 0.03, yPos: 74 }),
     makeTool({ num: 4, name: 'Diş Kateri 60°', type: 'thread', unit: 'gang', noseR: 0.05, vc: 80, feed: 0, yPos: 56 }),
     makeTool({ num: 5, name: 'Kesme 2.0 mm', type: 'cutoff', unit: 'gang', width: 2, noseR: 0.1, vc: 80, feed: 0.025, yPos: 38 }),
-    makeTool({ num: 6, name: 'Yedek Tornalama DCMT 55°', type: 'turn', unit: 'gang', insertCode: 'DCMT 11T302', insertShape: 'D', insertSize: 11, noseR: 0.2, vc: 150, feed: 0.05, yPos: 20 }),
-    makeTool({ num: 11, name: 'Tahrikli Matkap Ø5', type: 'ldrill', unit: 'cross', dia: 5, vc: 60, fz: 0.04, flutes: 2, yPos: -20 }),
-    makeTool({ num: 12, name: 'Parmak Freze Ø6', type: 'endmill', unit: 'cross', dia: 6, vc: 80, fz: 0.02, flutes: 3, yPos: -36 }),
-    makeTool({ num: 13, name: 'Parmak Freze Ø4', type: 'endmill', unit: 'cross', dia: 4, vc: 70, fz: 0.015, flutes: 3, yPos: -52 }),
-    makeTool({ num: 14, name: 'Tahrikli Matkap Ø3', type: 'ldrill', unit: 'cross', dia: 3, vc: 50, fz: 0.03, flutes: 2, yPos: -68 }),
-    makeTool({ num: 21, name: 'Punta Ø6 90°', type: 'center', unit: 'front', dia: 6, tipAngle: 90, vc: 40, feed: 0.03, xPos: -52, yPos: 38 }),
-    makeTool({ num: 22, name: 'Matkap Ø4', type: 'drill', unit: 'front', dia: 4, vc: 50, feed: 0.06, xPos: -52, yPos: 58 }),
-    makeTool({ num: 23, name: 'Matkap Ø8', type: 'drill', unit: 'front', dia: 8, vc: 60, feed: 0.08, xPos: -52, yPos: 78 }),
-    makeTool({ num: 24, name: 'Kılavuz M5x0.8', type: 'tap', unit: 'front', dia: 5, pitch: 0.8, vc: 8, xPos: -52, yPos: 98 }),
-    makeTool({ num: 31, name: 'Arka Punta Ø6', type: 'center', unit: 'rear', dia: 6, tipAngle: 90, vc: 40, feed: 0.03, yPos: 40 }),
-    makeTool({ num: 32, name: 'Arka Matkap Ø4', type: 'drill', unit: 'rear', dia: 4, vc: 50, feed: 0.06, yPos: 60 }),
-    makeTool({ num: 41, name: 'Arka Matkap Ø6', type: 'drill', unit: 'back', dia: 6, vc: 50, feed: 0.06, yPos: -20 }),
-    makeTool({ num: 42, name: 'Arka Pah Kateri', type: 'turn', unit: 'back', noseR: 0.2, vc: 120, feed: 0.03, yPos: 0 }),
-    makeTool({ num: 43, name: 'Arka Kılavuz M6', type: 'tap', unit: 'back', dia: 6, pitch: 1.0, vc: 8, yPos: 20 }),
-    makeTool({ num: 44, name: 'Arka Tahrikli Freze Ø4', type: 'endmill', unit: 'back', dia: 4, vc: 60, fz: 0.015, flutes: 3, live: true, yPos: -40 }),
+    makeTool({ num: 6, name: 'Kaba Tornalama CCMT 80°', type: 'turn', unit: 'gang', insertCode: 'CCMT 09T304', insertShape: 'C', insertSize: 9.7, noseR: 0.4, chipGeo: 'R', vc: 160, feed: 0.12, yPos: 20 }),
+    makeTool({ num: 31, name: 'Tahrikli Matkap Ø3', type: 'ldrill', unit: 'cross', dia: 3, vc: 50, fz: 0.03, flutes: 2, yPos: -10 }),
+    makeTool({ num: 32, name: 'Tahrikli Matkap Ø5', type: 'ldrill', unit: 'cross', dia: 5, vc: 60, fz: 0.04, flutes: 2, yPos: -40 }),
+    makeTool({ num: 33, name: 'Parmak Freze Ø4', type: 'endmill', unit: 'cross', dia: 4, vc: 70, fz: 0.015, flutes: 3, yPos: -70 }),
+    makeTool({ num: 34, name: 'Parmak Freze Ø6', type: 'endmill', unit: 'cross', dia: 6, vc: 80, fz: 0.02, flutes: 3, yPos: -100 }),
+    makeTool({ num: 35, offset: 1, name: 'Punta Ø6 90°', type: 'center', unit: 'front', dia: 6, tipAngle: 90, vc: 40, feed: 0.03, xPos: -28, yPos: -140 }),
+    makeTool({ num: 35, offset: 2, name: 'Matkap Ø4', type: 'drill', unit: 'front', dia: 4, vc: 50, feed: 0.06, xPos: -53, yPos: -140 }),
+    makeTool({ num: 35, offset: 3, name: 'Matkap Ø8', type: 'drill', unit: 'front', dia: 8, vc: 60, feed: 0.08, xPos: -78, yPos: -140 }),
+    makeTool({ num: 21, name: 'Arka Matkap Ø4', type: 'drill', unit: 'back', dia: 4, vc: 50, feed: 0.06, yPos: 70 }),
+    makeTool({ num: 22, name: 'Arka Pah Kateri', type: 'turn', unit: 'back', noseR: 0.2, vc: 120, feed: 0.03, yPos: 100 }),
+    makeTool({ num: 23, name: 'Arka Kılavuz M6', type: 'tap', unit: 'back', dia: 6, pitch: 1.0, vc: 8, yPos: 130 }),
+    makeTool({ num: 24, name: 'Arka Tahrikli Freze Ø4', type: 'endmill', unit: 'back', dia: 4, vc: 60, fz: 0.015, flutes: 3, live: true, yPos: 160 }),
   ];
+}
+
+/** Ekrandaki takım numarası: T01; çok takımlı tutucuda (aynı T no, farklı ofset) T35-1 */
+export function toolNo(t) {
+  const o = t.offset ?? t.num;
+  return 'T' + String(t.num).padStart(2, '0') + (o !== t.num ? '-' + o : '');
 }
 
 export function findTool(tools, id) {

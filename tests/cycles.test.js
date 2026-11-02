@@ -53,9 +53,11 @@ describe('G84 rijit kılavuz (M29)', () => {
   const rows = [{ dia: 10, len: 20, ch: 0.5 }];
   const part = makePart({ name: 'Kılavuz', profile: profileFromTable(rows), rows, features: [{ id: 'h', type: 'axialHole', side: 'front', dia: 4.2, depth: 10 }] });
   const p = newProject(part);
-  p.tools.find(t => t.num === 22).dia = 4.2;
+  p.tools.find(t => t.unit === 'front' && t.dia === 4).dia = 4.2;
+  // ön kolonun 3. katına (T35-3) M5 kılavuz
+  Object.assign(p.tools.find(t => t.unit === 'front' && t.offset === 3), { name: 'Kılavuz M5x0.8', type: 'tap', dia: 5, pitch: 0.8, vc: 8 });
   p.ops = autoOperations(p);
-  p.ops.splice(p.ops.findIndex(o => o.type === 'drill') + 1, 0, makeOp('tap', p.tools.find(t => t.num === 24).id, { featureId: 'h' }));
+  p.ops.splice(p.ops.findIndex(o => o.type === 'drill') + 1, 0, makeOp('tap', p.tools.find(t => t.type === 'tap' && t.unit === 'front').id, { featureId: 'h' }));
   p.post.cycles = { drill: true, rigidTap: true, thread: 'g92' };
   const { r, ss, c } = full(p);
   const t1 = r.posted.paths[0].join('\n');
@@ -68,14 +70,14 @@ describe('G84 rijit kılavuz (M29)', () => {
   it('M29 S1=… + G84 Z R F(hatve) + G80; kılavuzda M3 yok', () => {
     expect(t1).toMatch(/^M29 S1=\d+$/m);
     expect(t1).toMatch(/^G84 Z8\.4 R0\. F0\.8\nG80$/m);
-    const i = r.posted.paths[0].findIndex(s => /^T2424/.test(s)), j = r.posted.paths[0].findIndex(s => /^G84/.test(s));
+    const i = r.posted.paths[0].findIndex(s => /^T3503/.test(s)), j = r.posted.paths[0].findIndex(s => /^G84/.test(s));
     expect(r.posted.paths[0].slice(i, j).some(s => /\bM3\b/.test(s))).toBe(false);
   });
 });
 
 describe('yorumlayıcı: çevrim açılımı', () => {
   const tools = defaultTools();
-  const run = (body) => interpret(`$1\nG99\nT2222\nG97 S1=1000 M3\nG0 X0. Z-1.\n${body}\nM30\n`, { profile: postDef, machine: machineDef, tools });
+  const run = (body) => interpret(`$1\nG99\nT3502\nG97 S1=1000 M3\nG0 X0. Z-1.\n${body}\nM30\n`, { profile: postDef, machine: machineDef, tools });
   it('G83: her gagada R noktasına dönüş, sonraki gagada R−boşluk noktasına hızlı iniş', () => {
     const s = run('G83 Z5. R0. Q2000 F0.05\nG80');
     expect(s.errors).toEqual([]);

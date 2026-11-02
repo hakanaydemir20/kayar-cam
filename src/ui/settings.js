@@ -7,10 +7,11 @@ const KEY = 'kayarcam.settings.v1';
 export const SETTINGS = [
   { cat: 'view', icon: '◰', title: 'Görünüm', items: [
     ['view2', 'Açılışta grafik penceresi', 'select', '3d', '', [['3d', '3D simülasyon'], ['2d', '2D grafik (XZ kesit)']]],
-    ['body', 'Makine iç yapısı', 'bool', true, 'Burç sütunu, kayar başlık, kızaklar, ünite gövdeleri'],
+    ['body', 'Makine iç yapısı', 'bool', false, 'Burç sütunu, kayar başlık, kızaklar, ünite gövdeleri'],
     ['cabin', 'Dış kaporta', 'bool', false, 'Makinenin dış sacı ve kapıları'],
     ['holders', 'Takım tutma blokları', 'bool', false, 'Gang plakası, çapraz ve kovan blokları, arka ünite gövdesi'],
-    ['tools', 'Takımlar', 'select', 'active', '', [['active', 'Yalnız çalışan takım'], ['ghost', 'Çalışan + diğerleri saydam'], ['all', 'Tümü']]],
+    ['bareTools', 'Yalnız takımlar (uç ve kater)', 'bool', false, 'Tutma blokları, pens somunu, kovan ve tahrikli iş mili gövdesi gizlenir; yalnız kesici takımlar görünür'],
+    ['tools', 'Takımlar', 'select', 'none', 'Makinedeki takımların görünümü', [['none', 'Gizli'], ['all', 'Taretteki bütün takımlar'], ['ghost', 'Çalışan + diğerleri saydam'], ['active', 'Yalnız çalışan takım']]],
     ['path', 'Takım yolu', 'select', 'all', '', [['all', 'Tümü'], ['op', 'Çalışan işlem'], ['sel', 'Seçili işlem'], ['none', 'Gizli']]],
     ['ghost', 'Hedef parça (saydam)', 'bool', true, 'Bitmiş parçanın hayaleti'],
     ['edges', 'Kenar çizgileri', 'bool', true, 'Gölgeli + kenarlı görünüm (SolidWorks gibi)'],
@@ -45,7 +46,7 @@ export const SETTINGS = [
   ] },
 ];
 
-export const QUICK_VIEW = ['body', 'cabin', 'holders', 'tools', 'path', 'ghost', 'finishColor', 'edges', 'axes', 'dro', 'verify'];
+export const QUICK_VIEW = ['body', 'cabin', 'holders', 'bareTools', 'tools', 'path', 'ghost', 'finishColor', 'edges', 'axes', 'dro', 'verify'];
 
 export function defaults() {
   const o = {};
@@ -55,6 +56,12 @@ export function defaults() {
 export function loadSettings() {
   const o = defaults();
   try { Object.assign(o, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch { /* */ }
+  // ayar sürümü 2: makine çizimiyle taretteki bütün takımlar görünür (eski kayıtlı "yalnız çalışan" bir kez değişir)
+  if ((o._v || 1) < 2) { o.tools = 'all'; o._v = 2; }
+  // ayar sürümü 3: makine görünümleri (iç yapı, kaporta, tutucular) varsayılan kapalı — kayıtlı değer bir kez kapanır
+  if (o._v < 3) { o.body = false; o.cabin = false; o.holders = false; o._v = 3; }
+  // ayar sürümü 4: takımlar ve tutma blokları varsayılan gizli
+  if (o._v < 4) { o.tools = 'none'; o.holders = false; o._v = 4; }
   return o;
 }
 export function saveSettings(o) { try { localStorage.setItem(KEY, JSON.stringify(o)); } catch { /* */ } }

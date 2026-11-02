@@ -2,7 +2,8 @@
 // Şekiller: kutu {t:'box', b:[x0,x1,y0,y1,z0,z1]} ve x eksenli silindir/koni {t:'cyl', x0,x1, r0,r1, cy,cz, bore}.
 // Dünya: x eksenel (karşı iş miline doğru +), y yukarı, z operatöre doğru. Takım ucu x = 0.
 import { LAYOUT } from './frames.js';
-import { rotaryProfile, gangToolBoxes, isRotaryType } from '../tools/toolGeom.js';
+import { rotaryProfile, gangToolBoxes, isRotaryType, FRONT_BLOCK_X } from '../tools/toolGeom.js';
+import { toolNo } from '../tools/toolLibrary.js';
 
 export const PAN_Y = -330;                   // talaş teknesi üstü
 export const SUB_NUT = 1.5;                  // karşı iş mili pens somununun pens alnından çıkıntısı (mm, varsayılan)
@@ -30,6 +31,20 @@ export function bushBodies() {
   ];
 }
 
+/** Burçsuz (N.G.B.) çalışma: ana iş mili pens alnı parçanın arkasında, kesme bölgesinin NGB_GAP gerisinde (Z1 ile hareket eder) */
+export const NGB_GAP = 3;
+export const isNGB = (machine) => machine?.guideBush === false;
+/** Pens alnının dünya x konumu: parça ön alnı − (parça + arka pay + kesme genişliği + boşluk) */
+export const mainColletFace = (front, L, backStock, cutW) => front - (L + (backStock || 0) + (cutW || 0) + NGB_GAP);
+/** Burçsuz modda ana iş mili burnu (yerel: x = pens alnından geriye −), delik: çubuk */
+export function mainNoseBodies(barR) {
+  const bore = barR + 0.3;
+  return [
+    cyl(-10, 0, 22, 22, { name: 'Ana iş mili pens somunu', mat: 'chrome', bore }),
+    cyl(-34, -10, 30, 30, { name: 'Ana iş mili burnu', mat: 'darkSteel', bore }),
+  ];
+}
+
 /** Gang tool post gövdeleri (gang yerel çerçevesi: aktif takım ucu hattı orijin). Takım gövdeleri tool alanı taşır. */
 export function gangBodies(tools) {
   const all = tools.filter(GANG);
@@ -37,33 +52,33 @@ export function gangBodies(tools) {
   const zs = all.map(t => t.yPos);
   const zMin = Math.min(...zs, 0) - 22, zMax = Math.max(...zs, 0) + 30;
   out.push(box(-14, 52, 120, 178, zMin, zMax, { name: 'Gang kızağı', mat: 'paint', r: 6 }));
-  out.push(box(-16, 54, 178, 186, zMin - 2, zMax + 2, { name: 'Kızak kapağı', mat: 'starBlue', r: 3 }));
+  out.push(box(-16, 54, 178, 186, zMin - 2, zMax + 2, { name: 'Kızak kapağı', mat: 'paintMid', r: 3 }));
   const turn = all.filter(t => t.unit === 'gang'), cross = all.filter(t => t.unit === 'cross'), front = all.filter(t => t.unit === 'front');
   if (turn.length) {
     const a = Math.min(...turn.map(t => t.yPos)) - 8, b = Math.max(...turn.map(t => t.yPos)) + 8;
-    out.push(box(-12, 34, 86, 120, a - 3, b + 3, { name: 'Takım tutucu plakası', mat: 'castDark', r: 3, strip: 'turn' }));
+    out.push(box(-12, 34, 86, 120, a - 3, b + 3, { name: 'Takım tutucu plakası', mat: 'starBlue', r: 3, strip: 'turn' }));
     for (const t of turn) out.push(box(-2, 19, 38, 88, t.yPos - 6.8, t.yPos + 6.8, { name: `T${t.num} bağlama bloğu`, mat: 'blackOx', r: 1.5, clamp: t }));
   }
   if (cross.length) {
     const a = Math.min(...cross.map(t => t.yPos)) - 12, b = Math.max(...cross.map(t => t.yPos)) + 12;
     out.push(box(-14, 46, 50, 122, a, b, { name: 'Çapraz tahrikli ünite', mat: 'paint', r: 5, strip: 'cross' }));
-    out.push(box(-5, 33, 73, 111, a - 56, a - 4, { name: 'Çapraz ünite motoru', mat: 'starBlue', motor: true }));
-    out.push(box(-6, 34, 72, 112, a - 8, a, { name: 'Motor flanşı', mat: 'castDark', r: 3 }));
+    // tahrik motoru kızağın üstünde (yanda T35 ön delme kolonu var)
+    out.push(box(-6, 34, 186, 194, a + 4, b - 4, { name: 'Motor flanşı', mat: 'castDark', r: 3 }));
+    out.push(box(-4, 32, 194, 238, a + 8, b - 8, { name: 'Çapraz ünite motoru', mat: 'starBlue', r: 6 }));
     for (const t of cross) {
       const top = rotaryProfile(t).length;
       if (top < 52) out.push(vcyl((t.xPos || 0) + top, (t.xPos || 0) + 52, 12, t.yPos, { name: `T${t.num} tahrikli iş mili`, mat: 'darkSteel', spindleOf: t }));
     }
   }
   if (front.length) {
-    const a = Math.min(...front.map(t => t.yPos)) - 11, b = Math.max(...front.map(t => t.yPos)) + 11;
-    const xc = front[0].xPos || 0;
-    // tutucu kolu plakanın DIŞ ucunda ve bütün tornalama/kovan takımlarının ötesinde (en dıştakinden 14 mm):
-    // takım seçimi Y hareketlerinde ve en dıştaki takımla tornalarken öne çıkmış parçanın önünden geçmez
-    // (iç tarafta olsaydı Y hareketinde parçayı keserdi — çarpışma kontrolü bunu yakaladı)
-    const zArm = Math.max(b, ...all.filter(t => t.unit !== 'cross').map(t => t.yPos)) + 14;
-    // blok x ≤ 60 ve üst kenar xc+12: karşı iş mili kısa parçayı alırken basamaklı gövdesi (y ±30) çakışmaz
-    out.push(box(30, 60, xc - 12, xc + 12, a, zArm, { name: 'Kovan bloğu (ön)', mat: 'blackOx', r: 3, strip: 'front' }));
-    out.push(box(40, 56, xc - 12, 120, zArm, zArm + 8, { name: 'Kovan bloğu kolu', mat: 'castDark', r: 3 }));
+    // T35 ön delme kolonu (makine çizimi): takımlar X1 yönünde alt alta, aynı yanal konumda; blok kolonun arkasında,
+    // kol yukarı gang kızağına çıkar. Blok x ≥ FRONT_BLOCK_X: kesme düzleminde öne çıkan parçaya değmez.
+    for (const zc of [...new Set(front.map(t => t.yPos))]) {
+      const col = front.filter(t => t.yPos === zc), xs = col.map(t => t.xPos || 0);
+      const y0 = Math.min(...xs) - 14, y1 = Math.max(...xs) + 14;
+      out.push(box(FRONT_BLOCK_X, 60, y0, y1, zc - 14, zc + 14, { name: 'Ön delme kolonu (T35)', mat: 'blackOx', r: 3, strip: 'front', col: zc }));
+      out.push(box(40, 56, y1, 120, zc - 10, zc + 10, { name: 'Ön delme kolonu kolu', mat: 'castDark', r: 3 }));
+    }
   }
   for (const t of all) out.push(...toolBodies(t));
   return out;
@@ -72,7 +87,7 @@ export function gangBodies(tools) {
 /** Bir takımın gövdeleri (gang yerel ya da dünya), cut = kesici bölge (aktifken parçaya değebilir) */
 export function toolBodies(t) {
   const out = [];
-  const tag = { tool: t, name: `T${String(t.num).padStart(2, '0')} ${t.name}` };
+  const tag = { tool: t, name: `${toolNo(t)} ${t.name}` };
   if (t.unit === 'gang' || (t.unit === 'cross' && !isRotaryType(t))) {
     for (const g of gangToolBoxes(t)) {
       const [x0, x1, y0, y1, z0, z1] = g.box;
@@ -112,8 +127,8 @@ export function backBodies(tools) {
   const a = Math.min(...bz) - 13, b = Math.max(...bz) + 13;
   const X = LAYOUT.backToolX;
   const out = [
-    box(X - 62, X - 30, -22, 22, a, b, { name: 'Arka ünite', mat: 'starBlue', r: 4 }),
-    box(X - 70, X - 30, PAN_Y + 26, -22, a + 4, b - 4, { name: 'Arka ünite ayağı', mat: 'paint', r: 5 }),
+    box(X - 62, X - 30, -22, 22, a, b, { name: 'Arka ünite', mat: 'paint', r: 4 }),
+    box(X - 70, X - 30, PAN_Y + 26, -22, a + 4, b - 4, { name: 'Arka ünite ayağı', mat: 'paintMid', r: 5 }),
   ];
   for (const t of bt) out.push(...toolBodies(t));
   return out;

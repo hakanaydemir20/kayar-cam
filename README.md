@@ -66,48 +66,76 @@ Kayar otomat (Swiss-type) için çevrimdışı çalışan bir CAM programıdır.
   - Negatif uç: kol pimi ve üst pabuç.
   - Yuvarlak uç: dar boyunlu tutucu.
 - **İşlem başına iş mili:** sabit kesme hızı (G96 + G50 sınırı) ya da sabit devir (G97).
-- **Çizim yap:**
-  - **Delik aracı:** ön ya da arka alından içeri sürükleyince eksenel delik oluşur.
-  - **Çiz aracıyla delik:** dış hat arka alına çizildikten sonra parçanın içinde öne doğru geri atılan noktalar arka alından kademeli ya da boydan delik olur.
-  - Ölçü yazısına tıklayınca değer yerinde değiştirilir; Esc yalnız çizim aracını bırakır.
-  - Ø20 (makine sınırı) aşılamaz.
-- **G-koddan parça:** yapıştırılan ya da açılan program sonuna kadar simüle edilir. Kalan malzemenin dış profili ve eksenel delikleri bitmiş parça olarak çizilir ("Parça çıkar" düğmesi de var). Bu parçada fazla kesim karşılaştırması yapılmaz, çünkü hedef kodun kendi sonucudur.
-- **Sıfırdan G-kod yaz:** stok çapı ve malzeme sorulur, işlem listesi boş başlar, 3D'de o çapta çubuk oluşur.
-- **Yeni parça:** işlem planı kendiliğinden kurulmaz; plan düğmeyle oluşturulur.
-- **Malzeme** (üst çubuk): kesme değeri önerileri buna göre yapılır. Seçenekler: otomat çeliği, C45, 42CrMo4, paslanmaz, pirinç, alüminyum, titanyum, plastik.
-- **Parça / stok renkleri:**
-  - Bitmiş ölçüye (±0.03 mm) ulaşan yüzey mavi, işlenmemiş stok gri, fazla kesim kırmızı.
-  - İstenmeyen temasta (tutucu ya da gövde parçaya girerse) girdiği kadar malzeme kesilir ve kırmızı gösterilir.
-- **Çarpışma ve bindirme** (Ayarlar): tutucu–parça ve gövde–gövde güvenlik mesafesi, burç / karşı mil / arka ünite kontrolleri, G0 bindirme toleransı, çarpışma kesiği. Ayarlar projeyle kaydedilir; ihlal NC indirmeyi kilitler.
-- **3D görünüm:**
-  - Mat, kenar çizgili (SolidWorks tarzı) ve gölgesiz.
-  - Makine iç yapısı açık; dış kaporta ve takım tutma blokları gizlenebilir.
-  - Görünüm geçişleri animasyonlu; "Ön" görünüm parçanın görünen kısmına yakınlaşır.
-- **Arayüz:**
-  - Açık / koyu tema.
-  - İşlem ayarları sol menünün yanında mini pencerede açılır.
-  - Telefonda kabaca kullanılabilir.
+- **Çizim yap** (SolidWorks benzeri serbest çizim): döner parçanın kesiti eksenin üstüne çizilir (Z sağa, yukarı yarıçap). Kapalı konturların çift-tek dolgusu eksen etrafında döndürülür; içteki kapalı konturlar boşluktur.
 
-**Yardım turu (?):** ekranın bölümlerini iş sırasıyla (parçayı aç → parça → takımlar → işlemler → simülasyon → G-kod → NC kodu → ayarlar) açıklama balonlarıyla anlatır; *İleri / Geri*, klavyede ← → ve Esc.
+- **Araçlar:** Seç (noktayı sürükle, birleşik noktalar birlikte taşınır), Çizgi (zincir; başlangıca tıklayınca kapanır), Dikdörtgen, 3 noktalı Yay, Radyüs, Pah, Ölçü (çizgi boyu / nokta Z–Ø), Sil.
+- **Yakalama:** uç nokta, orta nokta, orijin, eksen, ızgara; diğer noktalarla yatay/dikey hiza kılavuzları. Shift basılıyken serbest.
+- **İç geometri otomatik sınıflanır:**
+  - alından başlayan, içe doğru daralan kademeler → matkap deliği (punta + matkap);
+  - düz dipli delik → uyarı (parmak freze / dalma / iç tornalama);
+  - içe doğru genişleyen bölge → iç kanal / segman kanalı;
+  - konik iç yüzey → iç tornalama.
+  İç kanal ve iç tornalama için otomatik işlem eklenmez; uyarı verilir. Hedef modele iç profil birebir girer.
+- **Denetim:** açık uçlar kırmızı nokta; kopuk parça, kapalı iç boşluk ve eksen altı çizim hatası, ilgili Z bölgesi kırmızı gösterilerek.
+- Esc pencereyi kapatmaz; ölçü yazısına tıklayınca değer yerinde değişir; Ø20 (makine) sınırı denetlenir.
 
-**Ayarlar (⚙):** kategoriler ve arama kutusu. Seçimler tarayıcıda saklanır.
+**Finiş otomatik:**
+- **Takım:** varsayılan, en küçük burun radyüslü takım.
+- **Hedef yüzey:** Ra 0.4–6.3 µm seçilir; ilerleme f = √(Ra·32·rε) ile hesaplanır.
+- **Değerler:** Vc malzemeden, G50 sınırı ve kontur toleransı pencereden.
+- **Kontroller:** teorik Ra hedefe göre denetlenir; erişim analizi yapılır, bölgeye erişen başka bir takım önerilir.
 
-| Kategori | Ayarlar |
+**Kaba otomatik — sıralı plan ve taret:**
+- **Sıra:** 1) alın tornalama (her zaman ilk), 2) ana kaba, 3) ana takımın erişemediği bölgeler için sırayla ek tornalama takımları (önce taretteki), 4) tornalama ucunun erişemediği köşeler için kanal takımıyla dalma, 5) tanınan geometriler: diş → punta → delme → çapraz delme → düzlük / çokgen / cep / çap kanalı / yazı, 6) karşı iş mili: parça alma, arka delme / arka alın, parça atma, 7) kesme yoksa kesme ve çubuk ilerletme.
+- **Adım listesi:** bütün adımlar varsayılan açık; kutusu kaldırılan adım oluşturulmaz ve takımı takılmaz. Delme/frezeleme işlemleri finişten sonra, kesmeden önce yer alır.
+- **Takım seçimi:** önce o özellik için seçilmiş uygun takım, sonra taretteki uygun takım (matkap çapı = delik çapı, freze ≤ düzlük boyu, freze < cep çapı …), yoksa malzemeye göre kesme değerli hazır takım. Arka tarafta istasyon doluysa bu programda kullanılmayan bir takımın yerine takılır (planda yazar).
+- **Derin delik:** matkabın önden erişimi (ağız boyu ve ön kovan bloğu) yetmiyorsa boydan delik önden erişilebilen kadar, kalanı arkadan (0.3 mm bindirmeyle) delinir; elle girilen derin delikte açıklayıcı hata verilir.
+- **Ana takım:** parçaya erişen en güçlü kenarlı uç önerilir (yuvarlak uç ve rε > 0.8 hariç); listeden taretteki ya da katalogdaki (tarete takılacak) bir takım seçilebilir.
+- **Taret:** tarette olmayan takımların yuvası (T no, Y1) planda gösterilir; tek onayla hepsi takılır ve işlemler kendi takımlarıyla (T kodu, otomatik takım değişimi) oluşturulur.
+- **Alın finiş payı:** pencerede seçilir (en çok 0.3 mm); bırakılan payı finiş konturu alır.
+- **Denetim:** `tests/e2e/roughcheck.mjs` beş parça (spin-tite STEP dahil) × bütün ana takım seçeneklerinde hata, çarpışma, fazla kesim olmadığını, ilk işlemin alın olduğunu ve erişilemeyen bölgelerde malzeme kalmadığını ölçer.
+
+**Bitmiş parça görünümü** (grafik araç çubuğu “◆ Bitmiş parça”, kısayol F): makine, takım ve stok gizlenir, yalnız hedef parça görünür. Bir yüzeye tıklanınca yüzey tanınır (silindir/koni, omuz, alın, delik, düzlük/cep/çokgen) ve uygun işlemler menüden eklenir: o Z aralığında kaba/finiş, kanal, diş, punta/delme/kılavuz, bölgesel frezeleme, verilen çapta çapraz delik.
+
+**Frezeleme deseni** (düzlük, çokgen, bölgesel frezeleme): işlem penceresinde görselli kartlarla seçilir — zikzak Z / Y, tek yön Z / Y, dıştan içe spiral. Spiral bölgesel frezelemede yalnız dışbükey bölgede kullanılır.
+
+**Örnek parçalar:** “Yeni parça → Örnek parçalar” kesit önizlemeli listeyi açar: Örnek Pim, Hidrolik Rakor (M12 diş, altıgen, boydan delik), Kontak Pimi (Ø5, Ø1 çapraz, arka krimp deliği), Anahtar Ağızlı Mil (iki düzlük), Flanşlı Burç (segman kanalı), Ayar Vidası (konik uç, altıgen baş, arka delik) ve Spin-tite insert STEP (`src/samples/`). `tests/e2e/samplesall.mjs` her birini kaba otomatik (bütün adımlar) ile hatasız, çarpışmasız, fazla kesimsiz doğrular.
+
+**Kapalı işlem → blok atlama:** işlem listesinde kapatılan işlem G-koddan silinmez; satırları “/” ile yazılır (FANUC BLOCK SKIP açıkken okunmaz). Modal durum kapalı bölgeden etkilenmez; simülasyon ve doğrulama bu satırları atlar. İşaret Post Ayarları’ndan değiştirilebilir. Parça alma, kesme, atma, çubuk ilerletme ve ara bağlama bekleme kodu içerdiği için kapatılınca yazılmaz.
+
+**Bir boydan çıkan adet** (üst çubuk): (ham boy − tutma payı) / (parça boyu + alın payı + kesme kateri genişliği + arka alın payı). Varsayılan 3000 mm boy, 200 mm tutma payı; menüden değiştirilir, projeyle kaydedilir. Bir boyun süresi de gösterilir.
+
+**Makine yerleşimi** (`makine çizimi/SB20R_TypeG_machining_zone.glb` sırasıyla, gerçek tutucu ölçüleriyle — `STATIONS`, `src/tools/toolLibrary.js`):
+- Gang plakası yanal (Y1) sırası: T01…T06 tornalama (18 mm adım) → T31…T34 çapraz tahrikli (30 mm adım) → T35 ön delme kolonu.
+- T35 kolonu: 3 kat alt alta (X1 yönünde), G-kodda T3501 / T3502 / T3503 (takım 35, ofset = kat), ekranda T35-1/2/3.
+- Arka ünite T21…T24: karşı iş mili ekseni yüksekliğinde yan yana (yanal 70 / 100 / 130 / 160 mm, X2 ile seçilir). Çizimde eksenin altında; karşı iş milinin Y ekseni olmadığı için eksen yüksekliğine alındı.
+- İstasyon doluysa kaba otomatik ve “matkap tak” düğmesi bu programda kullanılmayan takımın yerine takar; strok dışına yuva açılmaz.
+- Kılavuz burçlu / burçsuz (N.G.B.) çalışma Post ve Makine Ayarları’ndan seçilir. Burçsuzda burç ünitesi yoktur; ana iş mili pens somunu parçanın arkasında Z1 ile hareket eder ve çarpışma kontrolüne girer; parça boyu en çok çap × 2.5 (≤ 50 mm), ara bağlama kullanılamaz.
+- Tahmini stroklar yeni yerleşime göre: X1 −10…200, X2 −20…185 (makineden doğrulanmalı). Eski projeler açılırken takımlar istasyonlara taşınır (T numaraları korunur).
+- Çizimdeki T35’in karşı iş miline bakan (arka) matkap yuvaları henüz modellenmedi: gang üzerindeki takımla karşı iş milinde delme ayrı bir kinematik gerektirir.
+
+**Takım modelleri:** parmak frezeler `3d çizimler/parmak_freze_3F_D6.obj` modelinden (sadeleştirilmiş, `src/view3d/endmillModelData.js`); diğer çaplarda ağız bölgesi çapla ölçeklenir, toplam boy 50 mm. Çarpışma geometrisi aynı ölçüleri kullanır. Görünüm menüsündeki “Yalnız takımlar (uç ve kater)” tutma bloklarını, pens somununu, kovanı ve tahrikli iş mili gövdesini gizler.
+
+**Eksik matkap:** “takım seçilmedi — tarette Ø… matkap yok” uyarısındaki düğme matkabı uygun üniteye takar ve işleme atar.
+
+**Bölgesel frezeleme (C/Y):**
+- **Hareket:** C1 konumlanır, Y1–Z1 düzleminde parmak frezeyle serbest çokgen bölge katlar halinde taranır; dışbükey bölgede kenar pasosu yapılır.
+- **Bölge editörü:**
+  - köşe sürükle, kenara çift tıkla = köşe ekle, sağ tık = köşe sil;
+  - nokta tablosu;
+  - hazır bölgeler: dikdörtgen, tanınan özellikten (düzlük, cep, çokgen), anahtar ağzı (iki karşılıklı yüz).
+- **Hedef model:** bölge hedef geometriye dahildir, Kontrol fazla kesim göstermez.
+
+**Takım kartları:** kapakta teknik çizim üslubunda (gri dolgu, koyu kontur) takım görseli. Tornalama tutucusu uç tipine göre çizilir:
+
+| Tutucu | Uç |
 |---|---|
-| Görünüm | açılış grafiği (3D/2D), makine iç yapısı, dış kaporta, takımlar, takım yolu, hedef parça, eksen okları, renk açıklaması, DRO, soğutma efekti, arka plan |
-| Simülasyon | varsayılan hız, Verify renkleri, otomatik Verify/çarpışma kontrolü, çarpışmada durdur, G-kod satırını takip |
-| G-kod editörü | panel, canlı önizleme, Enter/Insert = EOB, yazı boyutu, renkli kod |
-| Arayüz | yazı/düğme boyutu, uzman seçenekleri, açılışta başlangıç ekranı, silmede onay, durum çubuğu, ayarları sıfırla |
-| Post ve makine | post-processor / M kodları / eksen limitleri penceresi, kurulum föyü |
-| Kısayollar | bütün klavye kısayolları |
+| Kol sıkmalı | negatif |
+| Vidalı | pozitif |
+| 45° kare | S |
+| Dar boyunlu | yuvarlak |
 
-**Çizim yap:** parçanın üst dış hattı 2D çizilir; ön yüz solda, Z sağa doğru ilerler, iki uç eksene kendiliğinden kapanır.
-
-- **Araçlar:** Çiz, Düzenle (sürükle), Pah, Radyüs, Sil.
-- **Yakalama:** ızgara, dik açı ve diğer köşelerle hiza; Shift basılıyken serbest.
-- **Düzenleme:** geri al / yinele (Ctrl+Z / Ctrl+Y); bütün köşeler sağdaki tablodan sayıyla düzenlenir.
-- **Denetim:** geriye giden nokta (alttan kesme), boş çizim ve sıfır çap anında uyarılır.
-- **Sonrası:** *Parçayı oluştur* kurulum penceresine (ön yüz, Z0, çubuk) geçer. Parça kartındaki *Çizimi düzenle* sonradan değiştirir.
+Kanal, kesme, diş, matkap, freze ve kılavuz da aynı üsluptadır. Ayrıntıda 3D model de görünür.
 
 **Kesici uç (elmas) tipi:** tornalama takımında ISO şekli seçilir (C 80°, D 55°, V 35°, K 55° paralelkenar, T 60° üçgen, W 80° trigon, S 90° kare, R yuvarlak) ya da ISO kodu yazılır.
 

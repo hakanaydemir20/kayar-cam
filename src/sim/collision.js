@@ -1,7 +1,7 @@
 // Tam makine çarpışma kontrolü: takım/tutucu/ünite gövdeleri ↔ parça ve çubuk, gang ↔ burç / karşı iş mili / arka ünite,
 // karşı iş mili ↔ ana parça, karşı iş milindeki parça ↔ arka ünite. Aktif takımın yalnız kesici bölgesi kendi
 // parçasına değebilir (o temas talaş simülasyonunun konusudur). Gövdeler bodies.js'ten (3D modelle aynı kaynak).
-import { bushBodies, gangBodies, backBodies, subBodies } from './bodies.js';
+import { bushBodies, gangBodies, backBodies, subBodies, isNGB, mainNoseBodies, mainColletFace } from './bodies.js';
 import { LAYOUT } from './frames.js';
 
 const TOL = 0.05;
@@ -74,7 +74,9 @@ export class Collider {
     const tools = project.tools;
     this.gang = gangBodies(tools);
     this.back = backBodies(tools);
-    this.bush = bushBodies();
+    this.ngb = isNGB(project.machine);
+    this.bush = this.ngb ? [] : bushBodies();
+    this.nose = this.ngb ? mainNoseBodies(project.stock.barDia / 2) : [];
     this.sub = subBodies(project.stock.barDia / 2, project.machine);
     this.barR = project.stock.barDia / 2;
     this.cache = new Map();   // ızgara → {ver, bins}
@@ -119,7 +121,7 @@ export class Collider {
     let mr = i1 >= i0 ? this.rowsMax(S, i0, i1) : 0;
     if (part.barBeyond && dB > S.dMax && A[0] < part.base - S.dMax) {
       // ızgara dışında kalan çubuk (burç içine kadar)
-      if (Math.min(A[1], part.base - S.dMax) > LAYOUT.bushFace) mr = Math.max(mr, this.barR);
+      if (Math.min(A[1], part.base - S.dMax) > (part.stopX ?? LAYOUT.bushFace)) mr = Math.max(mr, this.barR);
     }
     if (mr <= 0) return 0;
     if (s.t === 'cyl') {
@@ -179,7 +181,10 @@ export class Collider {
     const act1 = st1?.tool || null, act2 = st2?.tool || null;
     const iSplit = S.idx(ss.L + (ss.bs || 0) + 0.5 * ss.cutW);
     const front = ss.mainFrontWorld(pose1.m.Z);
-    const mainPart = { S, base: front, axisZ: 0, i0: st.attached === 'main' ? 0 : iSplit, i1: S.nz - 1, barBeyond: true };
+    // burçsuz: çubuk pens alnına kadar; pens somunu ve iş mili burnu Z1 ile hareket eder
+    const nFace = this.ngb ? mainColletFace(pose1.m.Z, ss.L, ss.bs, ss.cutW) : null;
+    const mainPart = { S, base: front, axisZ: 0, i0: st.attached === 'main' ? 0 : iSplit, i1: S.nz - 1, barBeyond: true, stopX: nFace ?? LAYOUT.bushFace };
+    const nose = this.nose.map(s => moved(s, nFace, 0, 0));
     const grip = ss.sim.frames ? ss.L - ss.sim.frames.projection : 5;
     const SS = ss.subStock();
     const subPart = SS ? { S: SS, base: subFace + grip, axisZ: subLat, i0: 0, i1: iSplit - 1, barBeyond: false } : null;
@@ -193,6 +198,7 @@ export class Collider {
       if (!own) { const d = this.partHit(s, mainPart); if (d) { hit(nm(s), 'ana iş milindeki parça/çubuk', d, s.bore != null ? 0 : this.mp); crash(s, mainPart, d, this.mp, spin1, pose1.p.C); } }
       if (subPart) { const d = this.partHit(s, subPart); if (d) { hit(nm(s), 'karşı iş milindeki parça', d, s.bore != null ? 0 : this.mp); crash(s, subPart, d, this.mp, spin2, pose2.p.C); } }
       if (C.checkBush) for (const b of this.bush) if (X(s, b)) hit(nm(s), b.name);
+      for (const b of nose) if (X(s, b)) hit(nm(s), b.name);
       if (C.checkSub) for (const b of sb) if (X(s, b)) hit(nm(s), b.name);
       if (C.checkBack) for (const b of this.back) if (X(s, b)) hit(nm(s), b.name);
     }
@@ -200,6 +206,7 @@ export class Collider {
     for (const s of sb) {
       const d = this.partHit(s, mainPart); if (d) hit(s.name, 'ana iş milindeki parça/çubuk', d);
       if (C.checkBush) for (const b of this.bush) if (X(s, b)) hit(s.name, b.name);
+      for (const b of nose) if (X(s, b)) hit(s.name, b.name);
       if (C.checkBack) for (const b of this.back) if (subHitsBack(s, b, act2, this.tb)) hit(s.name, nm(b));
     }
     // karşı iş milindeki parça ↔ arka ünite / burç

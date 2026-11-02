@@ -25,6 +25,7 @@
     <button class="tbtn" data-act="save" title="Projeyi kaydet (Ctrl+S)"><svg viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5zM8 3v5h7V3M8 21v-7h8v7"/></svg>Kaydet</button>
     <span class="tsp"></span>
     <div class="menu" id="mMat"><button class="tbtn mat" aria-haspopup="true" id="btnMat" title="Parça malzemesi (kesme değeri önerileri buna göre)"><svg viewBox="0 0 24 24"><path d="M4 8l8-4 8 4-8 4zM4 8v8l8 4 8-4V8M12 12v8"/></svg><span id="matTxt">Malzeme</span><span class="car">▾</span></button><div class="dd" id="matList"></div></div>
+    <div class="menu" id="mBar"><button class="tbtn bar" aria-haspopup="true" id="btnBar" title="Bir çubuk boyundan çıkan parça adedi"><svg viewBox="0 0 24 24"><path d="M2 10h20v4H2zM7 10v4M12 10v4M17 10v4"/></svg><span id="barTxt">Adet</span><span class="car">▾</span></button><div class="dd bar-dd" id="barDd"></div></div>
     <div class="spill" role="status" id="statusPill"><span class="dot" id="statusDot"></span><span id="statusTxt">Hazır</span></div>
     <span class="tsp"></span>
     <button class="tbtn" data-act="tools" id="btnTools" title="Takım listesi, kesici uçlar, ölçüler"><svg viewBox="0 0 24 24"><path d="M4 20 14 10M14 10l3-6 3 3-6 3M4 20l2-5 3 3z"/></svg>Takımlar</button>
@@ -39,6 +40,7 @@
     <div class="lhead">
       <button class="lbtn pri" data-act="addop" id="btnAddOp" title="Takım yolu (işlem) ekle"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>İşlem ekle</button>
       <button class="lbtn" data-act="rough" id="btnRough" title="Kaba tornalama: takım, paso, ilerleme, devir ve erişim analizi"><svg viewBox="0 0 24 24"><path d="M3 17h5v-4h6V9h7M3 21h18"/><path d="M16 4l3 3-6 6"/></svg>Kaba otomatik</button>
+      <button class="lbtn" data-act="finishw" id="btnFinish" title="Finiş: takım, yüzey kalitesi (Ra), ilerleme, devir"><svg viewBox="0 0 24 24"><path d="M3 17c4 0 5-8 9-8s5 8 9 8M3 21h18"/></svg>Finiş otomatik</button>
     </div>
     <div class="lsub"><b>İşlemler</b><span class="gsp"></span>
       <button class="gtog" id="btnPaths" aria-pressed="true" title="Takım yollarını gizle (T)"><svg viewBox="0 0 24 24"><path d="M3 18c4 0 4-12 9-12s5 12 9 12"/><circle cx="3" cy="18" r="1.6"/><circle cx="21" cy="18" r="1.6"/></svg>Takım yolu</button>
@@ -57,6 +59,8 @@
       <button data-view="top" title="Üstten">Üst</button>
       <button data-view="sub" title="Karşı iş mili">Karşı mil</button>
       <button data-view="all" title="Tümünü göster">Tümü</button>
+      <span class="gsep"></span>
+      <button id="btnFin" class="fin-btn" data-act="fin" aria-pressed="false" title="Yalnız bitmiş parçayı göster; yüzeye tıklayıp işlem ekle (F)">◆ Bitmiş parça</button>
       <span class="gsp"></span>
       <div class="menu" id="mView"><button class="gbtn" aria-haspopup="true">Görünüm<span class="car">▾</span></button><div class="dd dd-r" id="quickView"></div></div>
     </div>

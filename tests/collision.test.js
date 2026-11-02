@@ -22,7 +22,7 @@ function backPart(grip = 4) {
   p.ops = p.ops.filter(o => o.type !== 'groove');
   p.ops.find(o => o.type === 'cutoff').params.backStock = 0.3;
   p.ops.find(o => o.type === 'pickoff').params.grip = grip;
-  p.ops.splice(p.ops.findIndex(o => o.type === 'backPolar'), 0, makeOp('backTurn', tool(p, 42).id));
+  p.ops.splice(p.ops.findIndex(o => o.type === 'backPolar'), 0, makeOp('backTurn', tool(p, 22).id));
   return p;
 }
 
@@ -77,30 +77,30 @@ describe('çarpışma kontrolü: hatalı kurulumları yakalar', () => {
     const { ss } = run(p);
     expect(ss.collisions.some(c => /T02 .*↔ ana iş milindeki parça/.test(c.msg))).toBe(true);
   });
-  it('pens somunu ayarı çarpışma kontrolüne girer (Ø80 somun ön kovan bloğuna çarpar)', () => {
+  it('pens somunu ayarı çarpışma kontrolüne girer (Ø120 somun arka üniteye çarpar)', () => {
     const p = backPart(6);
-    p.machine.subSpindle.nutDia = 80;
+    p.machine.subSpindle.nutDia = 120;
     const { ss } = run(p);
     expect(ss.collisions.some(c => /pens somunu/.test(c.msg))).toBe(true);
   });
   it('arka ünitede komşu takım somunun yolunda: CAM delik derinliğini reddeder (açıklayıcı hata)', () => {
     const rows = [{ dia: 12, len: 8, ch: 0.3 }];
-    const p = newProject(makePart({ name: 'K', profile: profileFromTable(rows), rows, features: [{ id: 'b', type: 'axialHole', side: 'back', dia: 6, depth: 3 }] }));
-    tool(p, 44).yPos = tool(p, 41).yPos - 12;     // komşu freze ucu somun yarıçapının (15) içinde
+    const p = newProject(makePart({ name: 'K', profile: profileFromTable(rows), rows, features: [{ id: 'b', type: 'axialHole', side: 'back', dia: 4, depth: 3 }] }));
+    tool(p, 24).yPos = tool(p, 21).yPos - 12;     // komşu freze ucu somun yarıçapının (15) içinde
     const { r } = run(p);
     expect(r.errors.some(e => /arka işleme sınırını/.test(e.msg))).toBe(true);
   });
   it('arka ünitede takımlar çok sık: komşu takım karşı iş milindeki parçaya çarpar', () => {
     const p = backPart(4);
-    tool(p, 41).yPos = tool(p, 42).yPos - 8;
+    tool(p, 21).yPos = tool(p, 22).yPos - 8;
     const { ss } = run(p);
-    expect(ss.collisions.some(c => /T41 .*↔ karşı iş milindeki parça/.test(c.msg))).toBe(true);
+    expect(ss.collisions.some(c => /T21 .*↔ karşı iş milindeki parça/.test(c.msg))).toBe(true);
   });
   it('kovan takımı çok yukarıda: kovan bloğu parçaya çarpar', () => {
     const p = newProject();
     for (const t of p.tools.filter(t => t.unit === 'front')) t.xPos = -20;
     const { ss } = run(p);
-    expect(ss.collisions.some(c => /Kovan|T2\d/.test(c.msg))).toBe(true);
+    expect(ss.collisions.some(c => /kolonu|T35/.test(c.msg))).toBe(true);
   });
 });
 

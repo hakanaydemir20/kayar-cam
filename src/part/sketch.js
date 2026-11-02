@@ -1,6 +1,7 @@
 // 2D çizim → döner parça profili. Çizim: parçanın üst dış hattı, ön alından arkaya sıralı köşeler
 // [{z, r, ch?, rad?}] (r = yarıçap). İki uç eksene kapatılır; köşelere pah (ch) veya radyüs (rad) uygulanır.
 import { makePart } from './part.js';
+import { sectionToPart } from './section.js';
 
 const EPS = 1e-9;
 
@@ -82,6 +83,21 @@ export function partFromSketch(pts, name = 'Çizim Parça', features = []) {
 /** Ön ↔ arka çevir: köşeler ters sırada, Z aynalanır (pah/radyüs köşesinde kalır), özellikler aynalanır */
 export function mirrorSketchPart(part) {
   const L = part.length;
+  if (part.sketch2) {
+    // serbest çizim: varlıkları aynala (x → L − x), kesiti yeniden çöz; iç özellikler kesitten yeniden tanınır
+    const z0 = Math.min(...part.sketch2.flatMap(e => [e.a.x, e.b.x]));
+    const mx = (p) => p && ({ x: round(L - (p.x - z0)), y: p.y });
+    const ents = part.sketch2.map(e => ({ ...e, a: mx(e.b), b: mx(e.a), m: mx(e.m) }));
+    const lost = [];
+    const feats = part.features.filter(f => !['axialHole', 'innerGroove', 'innerTurn'].includes(f.type)).map(f => {
+      const g = { ...f };
+      for (const k of ['z', 'z0', 'z1']) if (g[k] != null) g[k] = round(L - g[k]);
+      if (g.z0 != null && g.z1 != null && g.z0 > g.z1) [g.z0, g.z1] = [g.z1, g.z0];
+      if (g.c != null) g.c = (360 - g.c) % 360;
+      return g;
+    }).filter(f => { if (f.type === 'faceSlot' || f.type === 'facePolygon') { lost.push(f); return false; } return true; });
+    return { part: sectionToPart(ents, part.name, feats).part, lost };
+  }
   const sk = [...part.sketch].reverse().map(p => ({ ...p, z: round(L - p.z) }));
   const lost = [];
   const feats = part.features.map(f => {

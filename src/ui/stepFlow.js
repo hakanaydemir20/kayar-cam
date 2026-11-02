@@ -1,5 +1,6 @@
 // STEP akışı (tarayıcı): OpenCascade WASM yükle, oku, bağla, hayalet model üret.
 import * as THREE from 'three';
+import { sectionGeometry } from '../view3d/partSection.js';
 import occtFactory from 'occt-import-js';
 import wasmUrl from 'occt-import-js/dist/occt-import-js.wasm?url';
 import { readStep } from '../cad/stepImport.js';
@@ -75,9 +76,7 @@ export function ghostFromMesh(part) {
 }
 
 export function ghostFromProfile(part) {
-  const pts = part.profile.map(p => new THREE.Vector2(Math.max(0, p.r), -p.z));
-  const g = new THREE.LatheGeometry(pts, 96);
-  g.rotateZ(-Math.PI / 2);
+  const g = sectionGeometry(part, 96);
   const grp = new THREE.Group();
   grp.add(new THREE.Mesh(g, ghostMat()));
   return grp;

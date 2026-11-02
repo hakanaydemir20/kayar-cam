@@ -102,12 +102,15 @@ log('takım yolu düğmesi', pOff, pOn, 'grup gizlendi', gHid, 'sonra', await pa
 // 7) sekmeler
 for (const bt of ['sync', 'msgs', 'verify', 'code']) { await page.click(`[data-rt="${bt}"]`); await page.waitForTimeout(200); }
 // 8) NC indir
-const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 5000 }).catch(() => null), (async () => { await page.click('#btnOutput'); await page.waitForTimeout(300); await page.locator('.mbody .btn.pri', { hasText: 'NC kodunu indir' }).click(); })()]);
+await page.waitForFunction(() => app.verify, null, { timeout: 60000 });
+console.log('İNDİRME ÖNCESİ', JSON.stringify(await page.evaluate(() => ({ e: app.result.errors.map(x => x.msg).slice(0, 3), c: app.verify.ss.collisions.map(x => x.msg).slice(0, 3), o: app.verify.c.over }))));
+const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 25000 }).catch(() => null), (async () => { await page.click('#btnOutput'); await page.waitForTimeout(300); await page.locator('.mbody .btn.pri:not([disabled])', { hasText: 'NC kodunu indir' }).click({ timeout: 20000 }); })()]);
 await page.keyboard.press('Escape');
 if (dl) { const p = await dl.path(); const txt = fs.readFileSync(p, 'utf8'); log('NC indirildi', dl.suggestedFilename(), txt.split('\n').length, 'satır'); }
 else log('NC indirilmedi (hata kilidi?)', await page.textContent('#toast'));
 // 9) proje kaydet + aç
-const [dl2] = await Promise.all([page.waitForEvent('download', { timeout: 5000 }), page.click('.topbar [data-act="save"]')]);
+await page.evaluate(() => app.closeModal?.());
+const [dl2] = await Promise.all([page.waitForEvent('download', { timeout: 15000 }), page.click('.topbar [data-act="save"]')]);
 const pp = await dl2.path();
 fs.mkdirSync('test-results', { recursive: true }); fs.copyFileSync(pp, 'test-results/test.kcam');
 await page.setInputFiles('#fileProj', 'test-results/test.kcam');
@@ -238,7 +241,7 @@ let steps = 1; while (await page.locator('.tour-tip').count()) { await page.clic
 log('yardım turu adım', steps - 1);
 // 27) kesici uç kodu
 await page.click('#btnTools'); await page.waitForTimeout(300);
-log('takım kartları', await page.locator('.tw-grid .tcard:not(.add)').count(), 'görselli', await page.evaluate(() => [...document.querySelectorAll('.tcard img')].filter(i => i.src.startsWith('data:image/png')).length));
+log('takım kartları', await page.locator('.tw-grid .tcard:not(.add)').count(), 'görselli', await page.evaluate(() => document.querySelectorAll('.tcard .tc-img svg').length));
 await page.locator('.tcard', { hasText: 'T01' }).first().click(); await page.waitForTimeout(200);
 const ic = page.locator('.tw-detail input[type=text]').nth(1);
 await ic.fill('CNMG 120408'); await ic.dispatchEvent('change'); await page.waitForTimeout(1500);
@@ -253,24 +256,31 @@ log('uç kodu', await page.evaluate(() => { const t = app.project.tools.find(x =
 // 28) çizim yap: 2D çiz → pah → parça
 await page.click('#btnOpen'); await page.locator('.menu.open .dd button', { hasText: 'Çizim yap' }).click(); await page.waitForTimeout(600);
 const SK = (z, r) => page.evaluate(([z, r]) => { const sk = window.__lastSketcher; const [x, y] = sk.S(z, r); const b = sk.cv.getBoundingClientRect(); return [b.left + x, b.top + y]; }, [z, r]);
-for (const [z, r] of [[0, 4], [10, 4], [10, 6], [25, 6], [25, 3], [30, 3]]) { const [x, y] = await SK(z, r); await page.mouse.click(x, y); await page.waitForTimeout(60); }
-await page.keyboard.press('Enter');
+for (const [z, r] of [[0, 0], [0, 4], [10, 4], [10, 6], [25, 6], [25, 3], [30, 3], [30, 0], [0, 0]]) { const [x, y] = await SK(z, r); await page.mouse.move(x, y); await page.mouse.click(x, y); await page.waitForTimeout(60); }
 await page.locator('.sk-tools button', { hasText: 'Pah' }).click();
 { const [x, y] = await SK(10, 6); await page.mouse.click(x, y); }
+await page.locator('.sk-tools button', { hasText: 'Dikdörtgen' }).click();
+{ const [x, y] = await SK(0, 0); await page.mouse.move(x, y); await page.mouse.click(x, y); const [x2, y2] = await SK(6, 2); await page.mouse.move(x2, y2); await page.mouse.click(x2, y2); }
 await page.click('.sk-panel .btn.pri'); await page.waitForTimeout(800);
 for (let k = 0; k < 3; k++) { await next(); await page.waitForTimeout(400); }
 await page.waitForTimeout(1500); await page.evaluate(() => app.action('auto')); await page.waitForTimeout(3000);
-log('çizim parçası', await page.evaluate(() => [app.project.part.source, app.project.part.length, app.project.part.maxDia, app.project.part.sketch.length]), await st());
+log('çizim parçası', await page.evaluate(() => [app.result.errors.map(e => e.msg).join(' | '), app.project.part.source, app.project.part.length, app.project.part.maxDia, app.project.part.sketch2.length, app.project.part.features.map(f => f.type + ' Ø' + f.dia).join(',')]), await st());
+// 28b) bölgesel frezeleme işlemi (menüden) ve finiş otomatik
+await page.click('#btnAddOp'); await page.locator('.opmenu button', { hasText: 'Bölgesel' }).click(); await page.waitForTimeout(2500);
+log('bölgesel frezeleme', await page.evaluate(() => { const o = app.project.ops.find(x => x.type === 'areaMill'); return [!!o, app.result.errors.map(e => e.msg).join(' | '), !!document.querySelector('.flyout .rg-cv')]; }));
+await page.keyboard.press('Escape');
+await page.click('#btnFinish'); await page.waitForTimeout(500); await page.locator('.rw-nav .btn.pri').click(); await page.waitForTimeout(3000);
+log('finiş', await page.evaluate(() => app.project.ops.filter(o => o.type === 'finish').map(o => o.name)), await st());
 // 29) kaba tornalama penceresi: malzeme, takım, öneri, erişim analizi, ikinci takım
 await page.click('#btnNew'); await page.waitForTimeout(300); await page.getByText('Örnek parçayla dene').click(); await page.waitForTimeout(800);
 for (let k = 0; k < 4; k++) { await next(); await page.waitForTimeout(400); }
 await page.waitForTimeout(1500);
 await page.click('#btnRough'); await page.waitForTimeout(500);
 await page.locator('.rw-form select').first().selectOption('ss'); await page.waitForTimeout(300);
-const rw = await page.evaluate(() => ({ ap: app._rough.ap, feed: app._rough.feed, vc: app._rough.vc, zones: document.querySelectorAll('.rw-zones div').length, t2: app._rough.t2 }));
+const rw = await page.evaluate(() => ({ ap: app._rough.ap, feed: app._rough.feed, vc: app._rough.vc, zones: document.querySelectorAll('.rw-zones div').length, plan: app._rough.plan.steps.map(x => x.kind + ':T' + x.tool.num + (x.virt ? '+' : '')).join(' ') }));
 await page.screenshot({ path: 'test-results/ui_rough.png' });
 await page.locator('.rw-nav .btn.pri').click(); await page.waitForTimeout(3500);
-log('kaba penceresi', rw, await page.evaluate(() => app.project.ops.filter(o => o.type === 'rough').map(o => [o.name, o.params.ap, o.params.zMin ?? '-', o.params.zMax ?? '-'])), await st());
+log('kaba penceresi', rw, await page.evaluate(() => app.project.ops.filter(o => ['face', 'rough', 'groove'].includes(o.type)).map(o => [o.name, o.params.ap, o.params.zMin ?? '-', o.params.zMax ?? '-'])), await st());
 // 30) malzeme menüsü (üst çubuk)
 await page.click('#btnMat'); await page.waitForTimeout(150);
 await page.locator('#matList button', { hasText: 'Alüminyum' }).click(); await page.waitForTimeout(1500);

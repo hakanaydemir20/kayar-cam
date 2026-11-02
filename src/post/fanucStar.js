@@ -67,9 +67,11 @@ function postPath(prog, P, meta, pi) {
   let curOp = null;
   let n = 0;
   const st = { motion: null, F: null, plane: null, feedMode: null, pos: {}, wo: null };
+  let skipping = null;        // kapalı işlem: { st, intent } — bölge sonunda modal durum geri yüklenir
   const emit = (s, keepBlank = false) => {
     if (!s && !keepBlank) return;
     if (P.lineNumbers && s && !s.startsWith('(') && !s.startsWith('O')) { n += P.lineStep; s = 'N' + n + ' ' + s; }
+    if (skipping && s) s = (P.blockSkip || '/') + s;
     lines.push(s);
     info.push({ opId: curOp });
   };
@@ -103,7 +105,7 @@ function postPath(prog, P, meta, pi) {
   const note = (pos) => {
     if (st.polar) return; // polar modda program X/C hipotetiktir (öz-kontrol yorumlayıcının dönüşümüyle ayrıca yapılır)
     for (const a of ['X', 'Y', 'Z', 'C']) if (pos[a] != null && !(a === 'Y' && prog.channel === 2)) intent[a] = a === 'Z' && prog.channel === 1 && meta.zShift ? +pos[a] - meta.zShift : +pos[a];
-    if (lines.length) checks.push({ line: lines.length - 1, pos: { ...intent } });
+    if (lines.length && !skipping) checks.push({ line: lines.length - 1, pos: { ...intent } });
   };
 
   const progNo = String(P.programNumber).padStart(4, '0');
@@ -123,6 +125,10 @@ function postPath(prog, P, meta, pi) {
       case 'opEnd': break;
       case 'comment': emit('(' + cleanComment(it.text) + ')'); break;
       case 'blank': break;
+      case 'skip':
+        if (it.on) skipping = { st: { ...st, pos: { ...st.pos } }, intent: { ...intent } };
+        else if (skipping) { Object.assign(st, skipping.st); intent = skipping.intent; skipping = null; }
+        break;
       case 'raw': emit(it.text); break;
       case 'wo': if (st.wo !== it.code) { emit(it.code); st.wo = it.code; st.pos = {}; st.motion = null; intent = {}; } break; // koordinat değişti: eksenler yeniden yazılmalı
       case 'tool': {

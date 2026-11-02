@@ -7,23 +7,29 @@ import { newProject, runPipeline, simulateText, autoOperations, saveProject, loa
 import { StockSim, buildTarget, compare } from '../sim/stockSim.js';
 import { COLLISION_DEFAULTS } from '../sim/collision.js';
 import { derivePart } from '../sim/derivePart.js';
-import { OP_TYPES, defaultParams, pickGrip } from '../ops/generators.js';
+import { OP_TYPES, defaultParams, pickGrip, MILL_PATTERNS } from '../ops/generators.js';
 import { makeOp } from '../ops/program.js';
+import { featurePlan } from '../ops/featurePlan.js';
+import { machineGlb, onMachineGlb } from '../view3d/machineGlb.js';
+import { sectionPoints } from '../view3d/partSection.js';
+import { SAMPLE_PARTS } from '../samples/sampleParts.js';
 import { buildContext } from '../ops/context.js';
-import { makeTool, TOOL_TYPES, UNITS, INSERT_SHAPES, INSERT_CODES, insertShapeOf, insertAdvice, theoreticalRa, CHIP_GEOS, TOOL_CATALOG, UNIT_NUMS, MATERIALS, suggestRough, parseInsertCode, insertOutline } from '../tools/toolLibrary.js';
+import { makeTool, TOOL_TYPES, UNITS, INSERT_SHAPES, INSERT_CODES, insertShapeOf, insertAdvice, theoreticalRa, CHIP_GEOS, suggestFinish, TOOL_CATALOG, UNIT_NUMS, STATIONS, MATERIALS, suggestRough, parseInsertCode, insertOutline, toolNo } from '../tools/toolLibrary.js';
 import { toolThumb } from '../view3d/toolThumbs.js';
+import { toolArt } from './toolArt.js';
 import { makePart, profileFromTable, STD_BARS, suggestBar, examplePart } from '../part/part.js';
 import { h, esc, OP_PARAMS, TOOL_FIELDS, FEATURE_FIELDS, FEATURE_LABELS, featureText, field } from './forms.js';
 import { importStepFile, ghostFromMesh, ghostFromProfile, loadToolModel } from './stepFlow.js';
 import { customToolModels } from '../view3d/toolMeshes.js';
 import { setupSheetHtml, barFlow, profileSvg } from './report.js';
 import { SetupWizard } from './setupWizard.js';
-import { validateSketch, partFromSketch } from '../part/sketch.js';
+import { entsFromPoints } from '../part/section.js';
 import { GcodeEditor, lineMap } from './gcodeEditor.js';
 import { Plot2D } from '../view3d/plot2d.js';
 import { loadSettings, saveSettings, settingsPanel, control, QUICK_VIEW } from './settings.js';
 import { Tour } from './tour.js';
 import { Sketcher } from './sketcher.js';
+import { FinishedView } from './finishedView.js';
 
 const $ = (id) => document.getElementById(id);
 const AUTOSAVE = 'kayarcam.project.v1';
@@ -44,6 +50,9 @@ export class App {
     this.viewer = new Viewer($('viewport'));
     this.viewer.view('zone', { instant: true });
     this.viewer.onFrame = (dt) => this.frame(dt);
+    this.fin = new FinishedView(this);
+    // makine iç yapısı: makine çizimi (GLB) yüklenince sahne yeniden kurulur
+    machineGlb(); onMachineGlb(() => { if (this.result) { this.buildScene(); this.stockSim?.seek(this.t); } });
     this.plot = new Plot2D($('viewport'));
     this.editor = new GcodeEditor($('gedbox'), {
       colorize,
@@ -77,10 +86,44 @@ export class App {
     $('matTxt').textContent = M.short;
     const ml = $('matList'); ml.innerHTML = '';
     for (const [k, m] of Object.entries(MATERIALS)) ml.append(h('button', { class: (P.stock.material || 'free') === k ? 'on' : '', onclick: () => { P.stock.material = k; this.recalc(true); this.toast(`Malzeme: ${m.label} — takım kesme değerleri için Takımlar → “öner”`, 3500); } }, h('i', {}, (P.stock.material || 'free') === k ? '✓' : ''), h('span', {}, m.label, h('small', {}, `kaba Vc ${m.vcRough} · f ${m.fRough} · paso ≤ ${m.apMax} mm`))));
+    this.renderBar();
     const zs = P.zero?.zShift || 0;
     const simBad = v ? v.ss.collisions.length + (v.c.over ? 1 : 0) : 0;
     $('sbPart').textContent = `⬢ ${P.part.name} · L${P.part.length.toFixed(2)} · Ø${P.stock.barDia} çubuk · Z0 ${!zs ? 'ön alın' : Math.abs(zs - P.part.length) < 1e-6 ? 'arka alın' : 'ön alından ' + zs}`;
     $('sbInfo').textContent = `${this.manual ? 'Manuel G-kod' : P.ops.filter(o => o.enabled).length + ' işlem'} · çevrim ${fmtTime(this.totalTime || 0)}${(r?.errors.length || 0) + simBad ? ' · ' + ((r?.errors.length || 0) + simBad) + ' sorun' : ''}`;
+  }
+  /** Bir çubuk boyundan çıkan adet: (ham boy − tutma payı) / (parça boyu + alın payı + kesme genişliği + arka alın payı) */
+  barYield() {
+    const P = this.project, S = P.stock;
+    const barLen = S.barLen ?? 3000, remnant = S.barRemnant ?? 200;
+    const cut = P.ops.find(o => o.type === 'cutoff' && o.enabled), ct = cut && P.tools.find(t => t.id === cut.toolId);
+    const cutW = ct?.width || this.result?.built?.ctx?.cutW || 2;
+    const back = Math.max(0, +cut?.params.backStock || 0);
+    const per = P.part.length + (S.faceStock || 0) + cutW + back;
+    const usable = Math.max(0, barLen - remnant);
+    const n = per > 0 ? Math.floor(usable / per + 1e-9) : 0;
+    return { barLen, remnant, usable, per, cutW, back, face: S.faceStock || 0, n, waste: usable - n * per };
+  }
+  renderBar() {
+    const P = this.project, y = this.barYield();
+    $('barTxt').textContent = `1 boy = ${y.n} adet`;
+    const dd = $('barDd'); dd.innerHTML = '';
+    const num = (k, def, label) => {
+      const i = h('input', { type: 'number', min: '0', step: '10', value: P.stock[k] ?? def });
+      i.addEventListener('change', () => { const v = parseFloat(i.value); if (Number.isFinite(v) && v >= 0) { P.stock[k] = v; this.renderBar(); } });
+      i.addEventListener('click', (e) => e.stopPropagation());
+      return h('label', { class: 'bar-f' }, h('span', {}, label), i, h('small', {}, 'mm'));
+    };
+    const r = (a, b) => h('div', { class: 'bar-r' }, h('span', {}, a), h('b', {}, b));
+    const t = this.totalTime || 0;
+    dd.append(h('div', { class: 'bar-big' }, h('b', {}, String(y.n)), h('span', {}, 'adet / boy')),
+      num('barLen', 3000, 'Ham çubuk boyu'), num('barRemnant', 200, 'Tutma payı (kalan)'),
+      h('hr'),
+      r('Kullanılan boy', `${y.usable} mm`),
+      r('Parça başına', `${+y.per.toFixed(3)} mm`),
+      h('div', { class: 'bar-s' }, `parça ${P.part.length.toFixed(2)} + alın payı ${y.face} + kesme ${y.cutW}${y.back ? ' + arka pay ' + y.back : ''}`),
+      r('Artan (son parçadan sonra)', `${+y.waste.toFixed(1)} mm`),
+      t ? r('Bir boyun süresi', ((T) => `${Math.floor(T / 3600)} sa ${String(Math.floor((T % 3600) / 60)).padStart(2, '0')} dk`)(t * y.n)) : null);
   }
   goStep(k) {
     const tab = (b) => this.rtab(b);
@@ -118,8 +161,25 @@ export class App {
         card(ico.gcode, 'G kodu ile simülasyon', 'Hazır NC dosyasını aç', () => { this.closeModal(); $('fileNc').click(); }),
         card(ico.type, 'Sıfırdan G-kod yaz', 'Boş program; satır satır yaz ve oynat', () => { this.closeModal(); this.action('gblank'); }),
         card(ico.demo, 'Örnek parçayla dene', 'Hazır pim: dış çap, diş, delik, düzlük', () => { this.closeModal(); new SetupWizard(this, { kind: 'table', part: examplePart() }).open(); }),
+        card(ico.step, 'Örnek parçalar', `${SAMPLE_PARTS.length + 1} hazır parça: rakor, pim, mil, burç, vida, STEP`, () => this.openSamples()),
         card(ico.open, 'Kayıtlı projeyi aç', '.kcam proje dosyası', () => { this.closeModal(); $('fileProj').click(); })));
     this.openModal('Yeni parça', body);
+  }
+  /** Örnek parça kütüphanesi: kesit önizlemeli liste; seçilen parça kurulum sihirbazıyla açılır */
+  openSamples() {
+    const grid = h('div', { class: 'smp-grid' });
+    const item = (title, desc, tags, svg, fn) => grid.append(h('button', { class: 'smp', onclick: fn },
+      h('span', { class: 'smp-svg', html: svg }), h('b', {}, title), h('span', { class: 'smp-d' }, desc),
+      h('span', { class: 'smp-tags' }, ...tags.map(t => h('i', {}, t)))));
+    for (const sp of SAMPLE_PARTS) {
+      const part = sp.make();
+      item(sp.name, sp.desc, [`L${+part.length.toFixed(2)}`, `Ø${+part.maxDia.toFixed(2)}`, ...sp.tags], miniSectionSvg(part),
+        () => { this.closeModal(); new SetupWizard(this, { kind: 'table', part: sp.make() }).open(); });
+    }
+    item('Spin-tite insert (STEP)', '3D model: flanş, altıgen, boydan Ø9.53 delik — STEP bağlama adımlarıyla', ['STEP', 'L18.29', 'Ø17.54', 'Altıgen'],
+      '<svg viewBox="0 0 32 32" width="72" height="72"><path d="M16 3 28 9.5v13L16 29 4 22.5v-13z M4 9.5 16 16l12-6.5M16 16v13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+      () => { this.closeModal(); this.openSampleStep(); });
+    this.openModal('Örnek parçalar', h('div', { class: 'start' }, h('p', { class: 'start-lead' }, 'Bir parça seçin: ön yüz, referans noktası ve çubuk seçiminden sonra “Kaba otomatik” ile bütün işlemler (tornalama, delme, diş, frezeleme) takımlarıyla birlikte önerilir.'), grid), { wide: true });
   }
   newTablePart() {
     const rows = [{ dia: 8, len: 10, ch: 0.5 }, { dia: 12, len: 15, ch: 0.5 }];
@@ -287,7 +347,7 @@ export class App {
   blankProgram() {
     const P = this.project, a = P.post.spindleAddress?.main || 'S', c = P.post.codes;
     const t = P.tools.filter(x => x.unit === 'gang' && x.type === 'turn').sort((p, q) => p.num - q.num)[0] || P.tools[0];
-    const tc = t ? 'T' + String(t.num).padStart(2, '0') + String(t.num).padStart(2, '0') : 'T0101';
+    const tc = t ? 'T' + String(t.num).padStart(2, '0') + String(t.offset ?? t.num).padStart(2, '0') : 'T0101';
     const R = P.stock.barDia;
     return ['%', '$1', 'O1000 (MANUEL PROGRAM)', 'G18 G21 G40 G80 G97 G99', tc, `G50 ${a}8000`, `G96 ${a}150 ${c.mainCW || 'M3'}`, `G0 X${(R + 2).toFixed(1)} Z-0.5`, 'G1 X0. F0.05', `G0 X${(R + 2).toFixed(1)}`, '', '%', ''].join('\n');
   }
@@ -347,6 +407,7 @@ export class App {
     this.machine.partMesh.mesh.add(ghost);
     this.applyOptions();
     this.machine.update(this.stockSim, this.t, 0);
+    this.fin?.rebuild();
   }
   applyOptions() {
     const c = this.cfg;
@@ -363,7 +424,8 @@ export class App {
     const body = c.body, cab = c.cabin;
     this.machine.setCabin(cab ? 'full' : 'none');
     this.machine.setBody(body);
-    this.machine.setHolders(c.holders);
+    this.machine.setHolders(c.holders && !c.bareTools);
+    this.machine.setBareTools(!c.holders || !!c.bareTools);   // tutucular kapalı: takımın kovan/blok kısımları da gizli
     this.machine.setEdges(c.edges);
     for (const sm of [this.machine.partMesh, this.machine.barMesh, this.machine.prevMesh]) if (sm && sm.edges.visible !== c.edges) sm.setEdges(c.edges);
     if (this._fc !== c.finishColor) { this._fc = c.finishColor; this.applyFinishColor(); }
@@ -371,6 +433,7 @@ export class App {
     this.machine.setAxesVisible(c.axes);
     this.applyPathVis(true);
     this.applyVerifyColors();
+    if (this.fin?.on) { this.machine.root.visible = false; this.viewer.setFloor(false); }
   }
   /** Canlı parça/stok renkleri (bitmiş ölçü = parça rengi) */
   applyFinishColor() {
@@ -472,7 +535,7 @@ export class App {
         <table class="drot"><tr class="hd"><th></th><td>Mutlak</td><td class="mc">Makine</td><td class="rm">Kalan</td></tr>${tr}</table>
         <div class="r"><span>S</span><span>${S || 0}${live ? ' · ' + live : ''} dev/dk</span></div>
         <div class="r"><span>F</span><span>${mv && mv.feed ? mv.feed.toFixed(0) + ' mm/dk' : mv?.kind === 'rapid' ? 'G0' : '—'}</span></div>
-        <div class="tl">${tool ? 'T' + String(tool.num).padStart(2, '0') + ' ' + esc(tool.name) : 'Takım yok'}</div></div>`;
+        <div class="tl">${tool ? toolNo(tool) + ' ' + esc(tool.name) : 'Takım yok'}</div></div>`;
     };
     $('dro').innerHTML = b('$1 ANA İŞ MİLİ', 1, m.pose1, m.m1) + (this.result.sim.paths[1] ? b('$2 KARŞI İŞ MİLİ', 2, m.pose2, m.m2) : '');
     if (this.cfg.axes) m.updateLabels();
@@ -577,6 +640,8 @@ export class App {
       if (e.code === 'Space') { e.preventDefault(); this.player('play'); }
       if (e.code === 'ArrowRight') this.player('fwd');
       if (e.code === 'ArrowLeft') this.player('back');
+      if (e.code === 'KeyF' && !e.ctrlKey && !e.metaKey) this.fin.toggle();
+      if (e.code === 'Escape' && this.fin?.on && document.getElementById('finPop')) { this.fin.closePop(); this.fin.clearHl(); }
       if (e.code === 'Digit2') { this.setView2('2d'); this.saveViewOpts(); }
       if (e.code === 'Digit3') { this.setView2('3d'); this.saveViewOpts(); }
       if (e.code === 'KeyT') this.togglePaths();
@@ -623,7 +688,7 @@ export class App {
         for (const t of list) {
           const used = P.ops.filter(o => o.toolId === t.id).length;
           grid.append(h('button', { class: 'tcard', onclick: () => { this._tv = { view: 'detail', id: t.id, filter: v.filter }; render(); } },
-            h('div', { class: 'tc-img' }, h('img', { src: toolThumb(t), alt: '' }), h('span', { class: 'tc-no' }, 'T' + String(t.num).padStart(2, '0')), t.live ? h('span', { class: 'tc-live', title: 'Tahrikli (döner) takım' }, '⟳ tahrikli') : null),
+            h('div', { class: 'tc-img', html: toolArt(t) }, h('span', { class: 'tc-no' }, toolNo(t)), t.live ? h('span', { class: 'tc-live', title: 'Tahrikli (döner) takım' }, '⟳ tahrikli') : null),
             h('div', { class: 'tc-tx' }, h('b', {}, t.name), h('small', {}, toolSub(t)), h('span', { class: 'tc-foot' }, h('em', {}, UNITS[t.unit].label.replace(/ \(.*\)/, '')), h('em', { class: used ? 'u' : '' }, used ? used + ' işlemde' : 'kullanılmıyor')))));
         }
         grid.append(h('button', { class: 'tcard add', onclick: () => { this._tv = { view: 'catalog', filter: v.filter }; render(); } }, h('span', { class: 'plus' }, '＋'), h('b', {}, 'Yeni takım'), h('small', {}, 'Hazır tiplerden seç')));
@@ -637,7 +702,7 @@ export class App {
           for (const it of g.items) {
             const tmp = makeTool({ ...it.p, num: 0 });
             grid.append(h('button', { class: 'tcard', onclick: () => { const t = this.addToolFrom(it.p); this._tv = { view: 'detail', id: t.id }; render(); } },
-              h('div', { class: 'tc-img' }, h('img', { src: toolThumb(tmp), alt: '' }), tmp.live ? h('span', { class: 'tc-live' }, '⟳ tahrikli') : null),
+              h('div', { class: 'tc-img', html: toolArt(tmp) }, tmp.live ? h('span', { class: 'tc-live' }, '⟳ tahrikli') : null),
               h('div', { class: 'tc-tx' }, h('b', {}, it.label), h('small', {}, toolSub(tmp)))));
           }
           wrap.append(grid);
@@ -647,7 +712,7 @@ export class App {
         const t = P.tools.find(x => x.id === v.id);
         this.sel = { kind: 'tool', id: t.id };
         box.append(h('div', { class: 'tw-bar' }, h('button', { class: 'btn', onclick: () => { this._tv = { view: 'grid', filter: v.filter || 'all' }; this.sel = { kind: 'none' }; render(); } }, '← Takımlar'),
-          h('b', { class: 'tw-title' }, 'T' + String(t.num).padStart(2, '0') + ' · ' + t.name)));
+          h('b', { class: 'tw-title' }, toolNo(t) + ' · ' + t.name)));
         const d = h('div', { class: 'tw-detail' });
         this.renderToolDetail(d, t);
         box.append(d);
@@ -671,19 +736,37 @@ export class App {
     if (cur) zones.push(cur);
     return zones.filter(z => z.z1 - z.z0 > 0.03 && z.depth > 0.02).map(z => ({ z0: +z.z0.toFixed(3), z1: +z.z1.toFixed(3), depth: +z.depth.toFixed(3) }));
   }
-  /** Kaba tornalama sihirbazı: malzeme, takım(lar), paso, ilerleme, devir; erişilemeyen bölgeler ve takım önerisi */
+  /** Kaba tornalama sihirbazı: malzeme, kesme değerleri, alın finiş payı; sıralı takım planı (alın → ana kaba → kalan bölgeler → kanal).
+   *  Tarette olmayan takımlar planda “takılacak” görünür; onayla hepsi tarete takılır ve işlemler takım değiştirerek oluşturulur. */
   openRough() {
     const P = this.project;
     const turns = P.tools.filter(t => t.type === 'turn' && t.channel === 1).sort((a, b) => a.num - b.num);
-    if (!turns.length) { this.toast('Ana iş milinde tornalama takımı yok — Takımlar penceresinden ekleyin', 4500); return; }
     const old = P.ops.find(o => o.type === 'rough');
+    const faceOld = P.ops.find(o => o.type === 'face');
+    // katalog adayları (tarette yoksa önerilir): yuvarlak uç ve büyük burun radyüsü kaba için uygun değil
+    const cat = TOOL_CATALOG[0].items.filter(it => it.p.insertShape !== 'R' && (it.p.noseR || 0.4) <= 0.8)
+      .map((it, k) => { const t = makeTool({ ...it.p, num: 0 }); t.id = 'cat:' + k; return { virt: true, it, t }; });
     const st = this._rough = {
-      mat: P.stock.material || 'free',
-      t1: (old && turns.find(t => t.id === old.toolId)) ? old.toolId : turns[0].id,
-      t2: '', strategy: old?.params.strategy || 'z', touched: {},
+      mat: P.stock.material || 'free', strategy: old?.params.strategy || 'z', touched: {},
+      t1: old && turns.some(t => t.id === old.toolId) ? old.toolId : null,
+      faceAllow: +(faceOld?.params.allow || 0) > 0, faceAllowV: +(faceOld?.params.allow || 0) || 0.05,
     };
+    const toolOf = (id) => turns.find(t => t.id === id) || cat.find(c => c.t.id === id)?.t;
+    const zonesOf = new Map();
+    const Z = (t) => { if (!zonesOf.has(t.id)) zonesOf.set(t.id, this.roughZones(t)); return zonesOf.get(t.id); };
+    const pool = [...turns.map(t => ({ virt: false, t })), ...cat];
+    const sameOnTurret = (t) => turns.find(x => insertShapeOf(x) === insertShapeOf(t) && Math.abs((x.noseR || 0.4) - (t.noseR || 0.4)) < 0.21);
+    // ana takım önerisi: bütün profile erişen en güçlü kenarlı (≥80°) uç, yoksa en güçlü kenar (kalanı sıradaki takımlar bitirir)
+    if (!st.t1) {
+      const ang = (t) => t.insertAngle || 35;
+      const all = pool.filter(c => !Z(c.t).length).sort((a, b) => ang(b.t) - ang(a.t) || (a.virt - b.virt));
+      const strong = [...pool].sort((a, b) => ang(b.t) - ang(a.t) || (a.virt - b.virt))[0];
+      const pick = all[0] && ang(all[0].t) >= 80 ? all[0] : strong;
+      const have = pick.virt ? sameOnTurret(pick.t) : pick.t;
+      st.t1 = (have || pick.t).id;
+    }
     const apply = () => {
-      const t = turns.find(x => x.id === st.t1), sg = suggestRough(st.mat, t, P.stock.barDia, P.stock.maxRpm || 8000);
+      const t = toolOf(st.t1), sg = suggestRough(st.mat, t, P.stock.barDia, P.stock.maxRpm || 8000);
       for (const k of ['ap', 'feed', 'vc', 'allowX', 'allowZ']) if (!st.touched[k]) st[k] = sg[k];
       if (st.retract == null) st.retract = old?.params.retract ?? 0.5;
       if (st.maxRpm == null) st.maxRpm = P.stock.maxRpm || 8000;
@@ -691,10 +774,13 @@ export class App {
     };
     apply();
     const box = h('div', { class: 'rw' });
+    const T2 = (t) => (t.num ? toolNo(t) + ' ' : '') + t.name;
+    // yeniden çizimde kaydırma konumu korunur (liste uzun)
+    const keep = (fn) => { const sc = [...box.querySelectorAll('.rw-side, .rw-form')].map(e => e.scrollTop), mb = box.closest('.modal-body, .mbody'); const top = mb?.scrollTop; fn(); [...box.querySelectorAll('.rw-side, .rw-form')].forEach((e, i) => { e.scrollTop = sc[i] || 0; }); if (mb) mb.scrollTop = top; };
     const render = () => {
       box.innerHTML = '';
-      const t1 = turns.find(x => x.id === st.t1);
-      const zones = this.roughZones(t1);
+      const t1 = toolOf(st.t1);
+      const zones = Z(t1);
       const M = MATERIALS[st.mat];
       // --- sol: ayarlar
       const L = h('div', { class: 'rw-form' });
@@ -704,9 +790,10 @@ export class App {
         i.addEventListener('change', () => { st[k] = Math.max(0, parseFloat(i.value) || 0); st.touched[k] = true; render(); });
         return h('div', { class: 'f' + (st.touched[k] ? ' edited' : '') }, h('label', {}, label, h('span', { class: 'u' }, unit)), i);
       };
-      L.append(h('h4', {}, 'Malzeme ve takım'),
+      const mainItems = [...turns.map(t => [t.id, `${T2(t)}${t.insertCode ? ' · ' + t.insertCode : ''}`]), ...cat.filter(c => !sameOnTurret(c.t)).map(c => [c.t.id, `＋ ${c.it.label} (tarete takılacak)`])];
+      L.append(h('h4', {}, 'Malzeme ve ana takım'),
         sel('Malzeme cinsi', st.mat, Object.entries(MATERIALS).map(([k, m]) => [k, m.label]), (v) => { st.mat = v; st.touched = {}; apply(); render(); }),
-        sel('Kaba takımı (ana)', st.t1, turns.map(t => [t.id, `T${String(t.num).padStart(2, '0')} ${t.name}${t.insertCode ? ' · ' + t.insertCode : ''}`]), (v) => { st.t1 = v; st.touched = {}; apply(); render(); }),
+        sel('Ana kaba takımı', st.t1, mainItems, (v) => { st.t1 = v; st.touched = {}; apply(); render(); }),
         h('div', { class: 'insprev' + (zones.length ? ' warn' : ''), html: insertSvg(t1) }),
         sel('Strateji', st.strategy, [['z', 'Z’ye paralel (boyuna pasolar)'], ['profile', 'Profile paralel (kontur ofset)'], ['face', 'Alın (X’e paralel)']], (v) => { st.strategy = v; }),
         h('h4', {}, 'Kesme değerleri ', h('button', { class: 'btn ghost mini', title: 'Malzeme ve takıma göre yeniden öner', onclick: () => { st.touched = {}; apply(); render(); } }, '✦ Öner')));
@@ -715,6 +802,14 @@ export class App {
         num('allowX', 'Finiş payı X (çapta)', 'mm'), num('allowZ', 'Finiş payı Z', 'mm'), num('retract', 'Geri çekme', 'mm', '0.1'));
       const cp = h('input', { type: 'checkbox' }); cp.checked = st.contourPass; cp.addEventListener('change', () => { st.contourPass = cp.checked; });
       g.append(h('div', { class: 'f full' }, h('label', { class: 'chk' }, cp, ' Son kaba pasodan sonra yarı finiş kontur pasosu')));
+      // alın finiş payı: kullanıcı karar verir
+      const fa = h('input', { type: 'checkbox' }); fa.checked = st.faceAllow; fa.addEventListener('change', () => { st.faceAllow = fa.checked; render(); });
+      g.append(h('div', { class: 'f full' }, h('label', { class: 'chk' }, fa, ' Alında finiş payı bırak (alını finiş konturu bitirir)')));
+      if (st.faceAllow) {
+        const fi = h('input', { type: 'number', step: '0.01', min: '0.01', max: '0.3', value: st.faceAllowV });
+        fi.addEventListener('change', () => { st.faceAllowV = Math.min(0.3, Math.max(0.01, parseFloat(fi.value) || 0.05)); render(); });
+        g.append(h('div', { class: 'f' }, h('label', {}, 'Alın finiş payı (Z)', h('span', { class: 'u' }, 'mm')), fi));
+      }
       L.append(g);
       const D = P.stock.barDia, n0 = Math.min(st.maxRpm, st.vc * 1000 / (Math.PI * D));
       const dMin = Math.max(1, P.part.profile.reduce((m, p) => p.r > 0.2 ? Math.min(m, p.r * 2) : m, D));
@@ -730,84 +825,398 @@ export class App {
       if (st.ap > adv.apMax + 1e-6) L.append(h('div', { class: 'msg w' }, h('span', { class: 'k' }, '!'), `Paso, ${t1.insertCode || 'ucun'} kesme kenarına göre büyük (en fazla ≈ ${adv.apMax} mm). Daha büyük uç ya da daha küçük paso seçin.`));
       if (st.ap < (t1.noseR || 0.4) - 1e-6) L.append(h('div', { class: 'msg w' }, h('span', { class: 'k' }, '!'), `Paso derinliği burun radyüsünden (R${t1.noseR}) küçük: talaş kırılmaz, kenar ezer. rε ≤ ap olmalı.`));
       L.append(h('div', { class: 'hint' }, `Teorik yüzey (kaba paso): Ra ≈ ${theoreticalRa(st.feed, t1.noseR || 0.4, t1.chipGeo === 'W').toFixed(2)} µm · ${CHIP_GEOS[t1.chipGeo || 'M'].label}`));
-      // --- sağ: erişim analizi
+      // --- sağ: erişim analizi + sıralı takım planı
+      const plan = st.plan = this.roughPlan(st, { turns, cat, toolOf, Z, sameOnTurret });
       const R = h('div', { class: 'rw-side' }, h('h4', {}, 'Erişim analizi'), h('div', { class: 'rw-svg', html: zoneSvg(P.part, zones) }));
-      if (!zones.length) R.append(h('div', { class: 'msg o' }, h('span', { class: 'k' }, '✓'), `T${String(t1.num).padStart(2, '0')} bütün profile erişiyor; tek takım yeterli.`));
+      if (!zones.length) R.append(h('div', { class: 'msg o' }, h('span', { class: 'k' }, '✓'), `${T2(t1)} bütün profile erişiyor.`));
       else {
-        R.append(h('div', { class: 'msg w' }, h('span', { class: 'k' }, '!'), `T${String(t1.num).padStart(2, '0')} (${INSERT_SHAPES[t1.insertShape]?.label || 'uç'}) ${zones.length} bölgeye erişemiyor; buralarda malzeme kalır.`));
+        R.append(h('div', { class: 'msg w' }, h('span', { class: 'k' }, '!'), `Ana takım ${zones.length} bölgeye erişemiyor; plan bu bölgeleri sıradaki takımlara verir.`));
         const zl = h('div', { class: 'rw-zones' });
         zones.forEach((z, i) => zl.append(h('div', {}, h('b', {}, `${i + 1}`), `Z ${z.z0} – ${z.z1}`, h('span', {}, `kalan ≤ ${z.depth} mm`))));
         R.append(zl);
-        // taretteki takımlar: her biri bu bölgelere erişiyor mu?
-        const reach = turns.filter(t => t.id !== t1.id).map(t => { const z2 = this.roughZones(t); return { t, n: zones.filter(zz => !z2.some(q => q.z1 > zz.z0 + 0.01 && q.z0 < zz.z1 - 0.01)).length }; });
-        const tl = h('div', { class: 'rw-tools' }, h('div', { class: 'sub' }, 'Taretteki takımlar'));
-        for (const x of reach) {
-          const full = x.n === zones.length;
-          tl.append(h('div', { class: 'rw-trow' + (st.t2 === x.t.id ? ' on' : '') }, h('img', { src: toolThumb(x.t), alt: '' }),
-            h('span', { class: 'tx' }, h('b', {}, `T${String(x.t.num).padStart(2, '0')} ${x.t.name}`), h('small', { class: full ? 'ok' : x.n ? 'mid' : 'bad' }, full ? '✓ bütün bölgelere erişir' : x.n ? `${x.n}/${zones.length} bölgeye erişir` : '✗ erişemez')),
-            x.n ? h('button', { class: 'btn' + (st.t2 === x.t.id ? ' pri' : ''), onclick: () => { st.t2 = x.t.id; render(); } }, st.t2 === x.t.id ? 'Seçili' : 'Kullan') : null));
-        }
-        // kanal takımı: genişliği bölgeye sığıyorsa dalarak işler
-        const grooves = P.tools.filter(t => t.type === 'groove' && t.channel === 1);
-        const gz = zones.filter(z => grooves.some(g => (g.width || 2) <= z.z1 - z.z0 + 0.4));
-        if (grooves.length && gz.length) {
-          const g = grooves.sort((a, b) => (b.width || 0) - (a.width || 0))[0];
-          tl.append(h('div', { class: 'rw-trow' }, h('img', { src: toolThumb(g), alt: '' }), h('span', { class: 'tx' }, h('b', {}, `T${String(g.num).padStart(2, '0')} ${g.name}`), h('small', { class: 'ok' }, `kanal işlemiyle ${gz.length} bölgeyi dalarak işler`)),
-            h('button', { class: 'btn', onclick: () => {
-              const ci = P.ops.findIndex(o => o.type === 'cutoff');
-              const ops = gz.map(z => { const op = makeOp('groove', g.id); op.params.z0 = +Math.max(0, z.z0 - 0.05).toFixed(3); op.params.z1 = +(z.z1 + 0.05).toFixed(3); op.name = `Kanal (kalan) T${String(g.num).padStart(2, '0')} Z${+z.z0.toFixed(1)}–${+z.z1.toFixed(1)}`; return op; });
-              P.ops.splice(ci >= 0 ? ci : P.ops.filter(o => OP_TYPES[o.type].channel === 1).length, 0, ...ops);
-              this.recalc(true); this.toast(`${ops.length} kanal işlemi eklendi (kalan bölgeler)`, 3500); render();
-            } }, 'Kanal ekle')));
-        }
-        R.append(tl);
-        const ok = reach.filter(x => x.n === zones.length);
-        if (ok.length) {
-          const best = ok.sort((a, b) => (b.t.insertAngle || 35) - (a.t.insertAngle || 35))[0].t;   // erişenlerin en güçlü kenarlısı
-          if (!st.t2) st.t2 = best.id;
-          R.append(h('div', { class: 'msg o' }, h('span', { class: 'k' }, '✦'), `Öneri: kalan bölgeler için T${String(best.num).padStart(2, '0')} ${best.name} (${INSERT_SHAPES[best.insertShape]?.label || ''}) kullanın.`));
-        } else R.append(h('div', { class: 'msg e' }, h('span', { class: 'k' }, '✗'), 'Bu bölgelere erişen tornalama takımı yok. Daha dar uçlu (V 35°) bir takım ekleyin ya da kanal işlemi kullanın.'),
-          h('div', { class: 'btnrow' }, h('button', { class: 'btn', onclick: () => { const nt = this.addToolFrom(TOOL_CATALOG[0].items[0].p); turns.push(nt); st.t2 = nt.id; render(); } }, '＋ V 35° takım ekle')));
-        R.append(sel('Kalan bölgeler için ikinci takım', st.t2, [['', '— kullanma (malzeme kalsın) —'], ...turns.filter(t => t.id !== t1.id).map(t => [t.id, `T${String(t.num).padStart(2, '0')} ${t.name}`])], (v) => { st.t2 = v; render(); }));
-        if (st.t2) { const z2 = this.roughZones(turns.find(t => t.id === st.t2)); const still = zones.filter(zz => z2.some(q => q.z1 > zz.z0 + 0.01 && q.z0 < zz.z1 - 0.01)); if (still.length) R.append(h('div', { class: 'msg w' }, h('span', { class: 'k' }, '!'), `İkinci takım da ${still.length} bölgeye tam erişemiyor.`)); }
       }
-      R.append(h('div', { class: 'hint' }, 'Analiz, uç açısı ve 93° yaklaşma açısından kalan geri açıyla parçanın dönel profilini karşılaştırır. Kırmızı: seçilen kaba takımın bırakacağı malzeme.'));
+      const pl = h('div', { class: 'rw-tools rw-plan' });
+      const nOn = plan.steps.filter(s => !s.off).length;
+      const all = h('input', { type: 'checkbox', 'aria-label': 'Bütün adımlar' }); all.checked = nOn === plan.steps.length; all.indeterminate = nOn > 0 && nOn < plan.steps.length;
+      all.addEventListener('change', () => { st.off = all.checked ? new Set() : new Set(plan.steps.map(s => s.key)); keep(render); });
+      pl.append(h('div', { class: 'sub' }, h('label', { class: 'chk' }, all, ` İşlem sırası ve taret · ${nOn}/${plan.steps.length} açık`)));
+      const group = (s) => s.kind === 'cutoff' ? 'Kesme' : s.kind !== 'feat' ? 'Tornalama' : s.side === 'back' ? 'Karşı iş mili (parça alma ile)' : 'Delme, diş ve frezeleme';
+      let no = 0, last = null;
+      plan.steps.forEach((s) => {
+        const gname = group(s);
+        if (gname !== last) { pl.append(h('div', { class: 'rw-grp' }, gname)); last = gname; }
+        const tag = s.off ? h('small', {}, 'kapalı · işlem oluşturulmaz')
+          : s.virt && !s.slot ? h('small', { class: 'bad' }, 'ünite dolu — takım takılamaz, adım atlanır')
+          : s.virt ? h('small', { class: 'mid' }, s.slot.replace ? `takılacak → ${s.slot.replace} yerine (bu programda kullanılmıyor)` : `tarete takılacak → ${toolNo(s.slot)} yuvası (Y1 = ${s.slot.yPos} mm)`) : h('small', { class: 'ok' }, `✓ tarette: ${T2(s.tool)}`);
+        const cb = h('input', { type: 'checkbox', 'aria-label': s.title }); cb.checked = !s.off;
+        cb.addEventListener('change', () => { st.off ||= new Set(); cb.checked ? st.off.delete(s.key) : st.off.add(s.key); keep(render); });
+        pl.append(h('label', { class: 'rw-trow' + (s.virt && !s.off ? ' virt' : '') + (s.off ? ' off' : '') }, cb, h('span', { class: 'rw-no' }, s.off ? '–' : String(++no)), h('span', { class: 'rw-art', html: toolArt(s.tool) }),
+          h('span', { class: 'tx' }, h('b', {}, s.title), h('small', {}, s.desc), tag)));
+      });
+      R.append(pl);
+      for (const w of plan.warn) R.append(h('div', { class: 'msg e' }, h('span', { class: 'k' }, '✗'), w));
+      const nNew = plan.steps.filter(s => s.virt && !s.off).map(s => s.tool).filter((t, i, a) => a.indexOf(t) === i).length;
+      R.append(h('div', { class: 'hint' }, 'Analiz, uç açısı ve 93° yaklaşma açısından kalan geri açıyla parçanın dönel profilini karşılaştırır; delik, diş, düzlük, çokgen ve cep gibi tanınan geometrilere uygun takımı (önce taretteki) seçer. Her adım kendi takımıyla çalışır (T kodu ile otomatik takım değişimi). İstemediğiniz adımın kutusunu kaldırın. Finiş için “Finiş otomatik” kullanın.'));
       box.append(L, R,
         h('div', { class: 'rw-nav' }, h('button', { class: 'btn ghost', onclick: () => this.closeModal() }, 'Vazgeç'), h('span', { class: 'sp' }),
-          h('button', { class: 'btn pri big', onclick: () => this.applyRough(st, zones) }, old ? 'Kaba işlemleri güncelle' : 'Kaba işlemleri oluştur')));
+          h('button', { class: 'btn pri big', onclick: () => this.applyRough(st) }, (nNew ? `Onayla: ${nNew} takımı tarete tak ve ` : 'Onayla: ') + `${nOn} adımı oluştur`)));
     };
     render();
-    this.openModal('Kaba tornalama', box, { wide: true, cls: 'rough' });
+    this.openModal('Kaba otomatik', box, { wide: true, cls: 'rough' });
   }
-  /** Kaba sihirbazı sonucunu işlem listesine yaz: ana kaba + (varsa) kalan bölgeler için ikinci takım */
-  applyRough(st, zones) {
+  /** Finiş sihirbazı: takım, hedef yüzey (Ra), ilerleme, Vc, G50, tolerans; erişim analizi; finiş işlemini oluştur */
+  openFinish() {
     const P = this.project;
+    const turns = P.tools.filter(t => t.type === 'turn' && t.channel === 1).sort((a, b) => a.num - b.num);
+    if (!turns.length) { this.toast('Ana iş milinde tornalama takımı yok — Takımlar penceresinden ekleyin', 4500); return; }
+    const old = P.ops.find(o => o.type === 'finish');
+    // varsayılan takım: en küçük burun radyüslü (ince) takım
+    const def = old && turns.find(t => t.id === old.toolId) || [...turns].sort((a, b) => (a.noseR || 0.4) - (b.noseR || 0.4) || (a.insertAngle || 35) - (b.insertAngle || 35))[0];
+    const rough = P.ops.find(o => o.type === 'rough' && o.enabled);
+    const st = { mat: P.stock.material || 'free', t: def.id, Ra: 1.6, tol: old?.params.tol ?? 0.002, maxRpm: old?.params.maxRpm || P.stock.maxRpm || 8000, touched: {} };
+    const apply = () => { const t = turns.find(x => x.id === st.t), sg = suggestFinish(st.mat, t, st.Ra); for (const k of ['feed', 'vc']) if (!st.touched[k]) st[k] = sg[k]; };
+    apply();
+    const box = h('div', { class: 'rw' });
+    const render = () => {
+      box.innerHTML = '';
+      const t = turns.find(x => x.id === st.t), zones = this.roughZones(t), M = MATERIALS[st.mat];
+      const L = h('div', { class: 'rw-form' });
+      const sel = (label, val, items, on) => { const s = h('select', {}, items.map(([v, l]) => h('option', { value: v }, l))); s.value = val; s.addEventListener('change', () => on(s.value)); return h('div', { class: 'f full' }, h('label', {}, label), s); };
+      const num = (k, label, unit, step = '0.01') => { const i = h('input', { type: 'number', step, min: '0', value: st[k] }); i.addEventListener('change', () => { st[k] = Math.max(0, parseFloat(i.value) || 0); if (k === 'Ra') { st.touched.feed = false; apply(); } else st.touched[k] = true; render(); }); return h('div', { class: 'f' + (st.touched[k] ? ' edited' : '') }, h('label', {}, label, h('span', { class: 'u' }, unit)), i); };
+      L.append(h('h4', {}, 'Malzeme ve takım'),
+        sel('Malzeme cinsi', st.mat, Object.entries(MATERIALS).map(([k, m]) => [k, m.label]), (v) => { st.mat = v; st.touched = {}; apply(); render(); }),
+        sel('Finiş takımı', st.t, turns.map(x => [x.id, `${toolNo(x)} ${x.name}${x.insertCode ? ' · ' + x.insertCode : ''} · R${x.noseR}`]), (v) => { st.t = v; st.touched = {}; apply(); render(); }),
+        h('div', { class: 'insprev' + (zones.length ? ' warn' : ''), html: insertSvg(t) }),
+        h('h4', {}, 'Yüzey ve kesme değerleri ', h('button', { class: 'btn ghost mini', onclick: () => { st.touched = {}; apply(); render(); } }, '✦ Öner')));
+      const g = h('div', { class: 'fg' });
+      g.append(sel('Hedef yüzey kalitesi Ra', String(st.Ra), [['0.4', 'Ra 0.4 µm (çok ince, taşlama yerine)'], ['0.8', 'Ra 0.8 µm (ince)'], ['1.6', 'Ra 1.6 µm (iyi, genel)'], ['3.2', 'Ra 3.2 µm (normal)'], ['6.3', 'Ra 6.3 µm (kaba finiş)']], (v) => { st.Ra = +v; st.touched.feed = false; apply(); render(); }),
+        num('feed', 'İlerleme', 'mm/dev', '0.005'), num('vc', 'Kesme hızı Vc (G96)', 'm/dak', '5'), num('maxRpm', 'Devir sınırı G50', 'dev/dak', '100'), num('tol', 'Kontur toleransı', 'mm', '0.001'));
+      L.append(g);
+      const Ra = theoreticalRa(st.feed, t.noseR || 0.2, t.chipGeo === 'W'), D = P.stock.barDia;
+      L.append(h('div', { class: 'kv' },
+        h('span', {}, 'Teorik yüzey'), h('span', {}, `Ra ≈ ${Ra.toFixed(2)} µm` + (Ra > st.Ra + 0.01 ? ' (hedefin üstünde!)' : ' ✓')),
+        h('span', {}, `Devir (Ø${D})`), h('span', {}, Math.round(Math.min(st.maxRpm, st.vc * 1000 / (Math.PI * D))) + ' dev/dak'),
+        h('span', {}, 'Finiş payı (kabadan)'), h('span', {}, rough ? `X ${rough.params.allowX} · Z ${rough.params.allowZ} mm` : 'kaba işlem yok — tam profil tek pasoda')));
+      if (!rough) L.append(h('div', { class: 'msg w' }, h('span', { class: 'k' }, '!'), 'İşlem listesinde kaba tornalama yok: finiş çubuk çapından tek pasoda kesmeye çalışır. Önce “Kaba otomatik” önerilir.'));
+      if (st.feed > 0.5 * (t.noseR || 0.2) + 1e-6) L.append(h('div', { class: 'msg w' }, h('span', { class: 'k' }, '!'), `İlerleme burun radyüsüne göre yüksek (f ≤ ${(0.5 * (t.noseR || 0.2)).toFixed(3)} mm/dev).`));
+      if (M.short && t.insertCode && /^.N/.test(t.insertCode.replace(/\s/g, ''))) L.append(h('div', { class: 'hint' }, 'Negatif uç finişte kesme kuvveti yüksek: ince ve küçük çaplı parçalarda pozitif (C/G sınıfı) uç tercih edin.'));
+      const R = h('div', { class: 'rw-side' }, h('h4', {}, 'Erişim analizi'), h('div', { class: 'rw-svg', html: zoneSvg(P.part, zones) }));
+      if (!zones.length) R.append(h('div', { class: 'msg o' }, h('span', { class: 'k' }, '✓'), `${toolNo(t)} bütün profili bitirebilir.`));
+      else {
+        R.append(h('div', { class: 'msg w' }, h('span', { class: 'k' }, '!'), `${toolNo(t)} ${zones.length} bölgeye erişemiyor: bu bölgeler finişsiz kalır.`));
+        const alt = turns.filter(x => x.id !== t.id && !this.roughZones(x).some(q => zones.some(z => q.z1 > z.z0 + 0.01 && q.z0 < z.z1 - 0.01)));
+        if (alt.length) R.append(h('div', { class: 'btnrow' }, ...alt.map(x => h('button', { class: 'btn', onclick: () => { st.t = x.id; st.touched = {}; apply(); render(); } }, `${toolNo(x)} ile bitir (erişir)`))));
+      }
+      box.append(L, R, h('div', { class: 'rw-nav' }, h('button', { class: 'btn ghost', onclick: () => this.closeModal() }, 'Vazgeç'), h('span', { class: 'sp' }),
+        h('button', { class: 'btn pri big', onclick: () => {
+          P.stock.material = st.mat;
+          let op = P.ops.find(o => o.type === 'finish');
+          if (!op) {
+            op = makeOp('finish', st.t);
+            const lr = P.ops.map(o => o.type === 'rough' || (o.type === 'groove' && o.auto === 'rough') ? 'rough' : o.type).lastIndexOf('rough'), lf = P.ops.map(o => o.type).lastIndexOf('face');
+            const at = lr >= 0 ? lr + 1 : lf >= 0 ? lf + 1 : 0;
+            P.ops.splice(at, 0, op);
+          }
+          op.toolId = st.t; op.enabled = true;
+          Object.assign(op.params, { feed: st.feed, vc: st.vc, tol: st.tol, maxRpm: st.maxRpm, spindleMode: 'css' });
+          op.name = `İnce Tornalama ${toolNo(t)} Ra${st.Ra}`;
+          this.closeModal(); this.sel = { kind: 'op', id: op.id }; this.recalc(true);
+          this.toast(`Finiş işlemi ${old ? 'güncellendi' : 'oluşturuldu'}: f ${st.feed} mm/dev, Vc ${st.vc} m/dak, teorik Ra ${Ra.toFixed(2)} µm`, 4500);
+        } }, old ? 'Finiş işlemini güncelle' : 'Finiş işlemini oluştur')));
+    };
+    render();
+    this.openModal('Finiş otomatik — ince tornalama', box, { wide: true, cls: 'rough' });
+  }
+  /** Frezeleme takım yolu deseni: görselli kartlar (Z yatay, Y düşey; mavi = kesme, turuncu kesik = kalkış) */
+  millPatternPicker(box, op, change) {
+    const def = op.type === 'areaMill' ? 'zigzagY' : 'zigzagZ';
+    const cur = op.params.pattern || def;
+    const W = 76, H = 48, x0 = 8, x1 = 68, y0 = 8, y1 = 40;
+    const cut = (d) => `<path d="${d}" fill="none" stroke="#4b8bff" stroke-width="1.6" stroke-linejoin="round"/>`;
+    const air = (d) => `<path d="${d}" fill="none" stroke="#f59e0b" stroke-width="1" stroke-dasharray="2 2"/>`;
+    const arrow = (x, y, dx, dy) => `<path d="M${x} ${y} l${-dx * 4 - dy * 2.5} ${-dy * 4 + dx * 2.5} M${x} ${y} l${-dx * 4 + dy * 2.5} ${-dy * 4 - dx * 2.5}" stroke="#4b8bff" stroke-width="1.4" fill="none"/>`;
+    const svg = (k) => {
+      let b = `<rect x="${x0 - 3}" y="${y0 - 3}" width="${x1 - x0 + 6}" height="${y1 - y0 + 6}" rx="3" fill="rgba(138,153,168,.18)" stroke="rgba(138,153,168,.6)"/>`;
+      const ys = [y0, y0 + 8, y0 + 16, y0 + 24, y1], xs = [x0, x0 + 12, x0 + 24, x0 + 36, x0 + 48, x1];
+      if (k === 'zigzagZ') { let d = `M${x0} ${ys[0]}`; ys.forEach((y, i) => { if (i) d += ` L${i % 2 ? x1 : x0} ${y}`; d += ` L${i % 2 ? x0 : x1} ${y}`; }); b += cut(d) + arrow(x0, y1, -1, 0); }
+      if (k === 'zigzagY') { let d = `M${xs[0]} ${y0}`; xs.forEach((x, i) => { if (i) d += ` L${x} ${i % 2 ? y1 : y0}`; d += ` L${x} ${i % 2 ? y0 : y1}`; }); b += cut(d) + arrow(x1, y0, 0, -1); }
+      if (k === 'onewayZ') { ys.forEach((y, i) => { b += cut(`M${x0} ${y} L${x1} ${y}`) + arrow(x1, y, 1, 0); if (i < ys.length - 1) b += air(`M${x1} ${y} L${x0} ${ys[i + 1]}`); }); }
+      if (k === 'onewayY') { xs.forEach((x, i) => { b += cut(`M${x} ${y1} L${x} ${y0}`) + arrow(x, y0, 0, -1); if (i < xs.length - 1) b += air(`M${x} ${y0} L${xs[i + 1]} ${y1}`); }); }
+      if (k === 'spiral') { let d = ''; for (let i = 0; i < 3; i++) { const a = x0 + i * 8, c = y0 + i * 6, bb = x1 - i * 8, e = y1 - i * 6; d += `${i ? ' L' : 'M'}${a} ${c} L${bb} ${c} L${bb} ${e} L${a} ${e} L${a} ${c}`; } d += ` L${x0 + 24} ${(y0 + y1) / 2} L${x1 - 24} ${(y0 + y1) / 2}`; b += cut(d); }
+      return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">${b}</svg>`;
+    };
+    const desc = { zigzagZ: 'Z boyunca gidip gelir; en kısa yol', zigzagY: 'Y boyunca (eksene dik) gidip gelir', onewayZ: 'Hep aynı yönde Z boyunca; her pasoda kalkar (eşit yüzey)', onewayY: 'Hep aynı yönde Y boyunca; her pasoda kalkar', spiral: 'Kenardan içe kapalı konturlar; kenar izi temiz' };
+    const grid = h('div', { class: 'mp-grid', role: 'radiogroup', 'aria-label': 'Takım yolu deseni' });
+    for (const [k, label] of Object.entries(MILL_PATTERNS)) {
+      grid.append(h('button', { class: 'mp-card' + (k === cur ? ' on' : ''), role: 'radio', 'aria-checked': String(k === cur), title: desc[k], onclick: () => { op.params.pattern = k; change(); } },
+        h('span', { class: 'mp-svg', html: svg(k) }), h('b', {}, label), h('small', {}, desc[k])));
+    }
+    box.append(h('div', { class: 'tsec', style: { padding: '8px 0 2px' } }, 'Takım yolu deseni'), grid,
+      h('div', { class: 'hint' }, op.type === 'areaMill' ? 'Bölge çokgeni içinde uygulanır. Spiral yalnız dışbükey bölgelerde; değilse zikzak kullanılır.' : 'Görsel: Z yatay (parça ekseni), Y düşey. Mavi = kesme, turuncu kesik = havada dönüş.'));
+  }
+  /** Bölgesel frezeleme bölge editörü: seçilen C yönünden parça yan görünüşü (Z yatay, Y düşey), çokgen bölge */
+  regionEditor(box, op, change) {
+    const P = this.project, p = op.params, L = P.part.length, R = P.part.maxDia / 2;
+    const tool = P.tools.find(t => t.id === op.toolId), rt = (tool?.dia || 4) / 2;
+    p.region ||= [{ z: L * 0.3, y: -R * 0.5 }, { z: L * 0.6, y: -R * 0.5 }, { z: L * 0.6, y: R * 0.5 }, { z: L * 0.3, y: R * 0.5 }];
+    const W = 340, H = 190;
+    const cv = h('canvas', { class: 'rg-cv', width: W * 2, height: H * 2, style: { width: W + 'px', height: H + 'px' } });
+    const sx = (W - 30) / Math.max(L, 1), sy = (H - 30) / (2.4 * R || 1);
+    const X = (z) => 15 + z * sx, Y = (y) => H / 2 - y * sy, Zi = (px) => (px - 15) / sx, Yi = (py) => (H / 2 - py) / sy;
+    const g = cv.getContext('2d'); g.scale(2, 2);
+    const draw = () => {
+      g.clearRect(0, 0, W, H); g.fillStyle = '#0e1419'; g.fillRect(0, 0, W, H);
+      // parça yan görünüşü (dış profil ±r)
+      g.beginPath(); P.part.profile.forEach((q, i) => { i ? g.lineTo(X(q.z), Y(q.r)) : g.moveTo(X(q.z), Y(q.r)); });
+      for (let i = P.part.profile.length - 1; i >= 0; i--) { const q = P.part.profile[i]; g.lineTo(X(q.z), Y(-q.r)); }
+      g.closePath(); g.fillStyle = 'rgba(138,153,168,.35)'; g.fill(); g.strokeStyle = '#8a99a8'; g.stroke();
+      g.strokeStyle = 'rgba(147,161,175,.5)'; g.setLineDash([6, 3]); g.beginPath(); g.moveTo(0, Y(0)); g.lineTo(W, Y(0)); g.stroke(); g.setLineDash([]);
+      // bölge + takım yarıçapı kadar iç sınır (yaklaşık)
+      g.beginPath(); p.region.forEach((q, i) => { i ? g.lineTo(X(q.z), Y(q.y)) : g.moveTo(X(q.z), Y(q.y)); }); g.closePath();
+      g.fillStyle = 'rgba(75,139,255,.25)'; g.fill(); g.strokeStyle = '#6ea2ff'; g.lineWidth = 1.5; g.stroke(); g.lineWidth = 1;
+      p.region.forEach((q, i) => { g.beginPath(); g.arc(X(q.z), Y(q.y), i === drag ? 5 : 4, 0, Math.PI * 2); g.fillStyle = i === drag ? '#4b8bff' : '#eaf0f6'; g.fill(); });
+      g.fillStyle = '#93a1af'; g.font = '10px Segoe UI, sans-serif'; g.fillText(`C${p.c || 0}° yönünden · Y yanal, Z eksenel · freze Ø${2 * rt}`, 6, 12);
+      g.fillStyle = '#3ecf8e'; g.fillText('Z0', X(0) + 2, H - 4);
+    };
+    let drag = -1;
+    const pos = (e) => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+    const snapV = (v) => Math.round(v * 20) / 20;
+    cv.addEventListener('pointerdown', (e) => {
+      const [x, y] = pos(e);
+      const i = p.region.findIndex(q => Math.hypot(X(q.z) - x, Y(q.y) - y) < 8);
+      if (e.button === 2 && i >= 0 && p.region.length > 3) { e.preventDefault(); p.region.splice(i, 1); draw(); change(); return; }
+      if (i >= 0) { drag = i; cv.setPointerCapture(e.pointerId); }
+    });
+    cv.addEventListener('contextmenu', (e) => e.preventDefault());
+    cv.addEventListener('pointermove', (e) => { if (drag < 0) return; const [x, y] = pos(e); p.region[drag] = { z: snapV(Math.max(0, Math.min(L, Zi(x)))), y: snapV(Yi(y)) }; draw(); });
+    cv.addEventListener('pointerup', () => { if (drag >= 0) { drag = -1; draw(); change(); } });
+    cv.addEventListener('dblclick', (e) => {
+      // kenara çift tıklama: araya köşe ekle
+      const [x, y] = pos(e); let best = -1, bd = 10;
+      p.region.forEach((a, i) => { const b = p.region[(i + 1) % p.region.length]; const ax = X(a.z), ay = Y(a.y), bx = X(b.z), by = Y(b.y); const L2 = (bx - ax) ** 2 + (by - ay) ** 2 || 1; const t = Math.max(0, Math.min(1, ((x - ax) * (bx - ax) + (y - ay) * (by - ay)) / L2)); const d = Math.hypot(x - ax - t * (bx - ax), y - ay - t * (by - ay)); if (d < bd) { bd = d; best = i; } });
+      if (best >= 0) { p.region.splice(best + 1, 0, { z: snapV(Zi(x)), y: snapV(Yi(y)) }); draw(); change(); }
+    });
+    draw();
+    const tbl = h('table', { class: 'pt' }, h('tr', {}, ...['#', 'Z', 'Y', ''].map(x => h('th', {}, x))));
+    p.region.forEach((q, i) => {
+      const c = (k) => { const inp = h('input', { type: 'number', step: 'any', value: q[k] }); inp.addEventListener('change', () => { const v = parseFloat(inp.value); if (Number.isFinite(v)) { q[k] = v; change(); } }); return h('td', {}, inp); };
+      tbl.append(h('tr', {}, h('td', { class: 'x' }, String(i + 1)), c('z'), c('y'), h('td', {}, h('button', { class: 'x', title: 'Köşeyi sil', onclick: () => { if (p.region.length > 3) { p.region.splice(i, 1); change(); } } }, '✕'))));
+    });
+    // hazır bölgeler
+    const flats = P.part.features.filter(f => f.type === 'flat' || f.type === 'pocket' || f.type === 'polygon');
+    const rect = (z0, z1, y0, y1) => [{ z: z0, y: y0 }, { z: z1, y: y0 }, { z: z1, y: y1 }, { z: z0, y: y1 }];
+    const presets = h('div', { class: 'btnrow' },
+      h('button', { class: 'btn', onclick: () => { const zs = p.region.map(q => q.z), ys = p.region.map(q => q.y); p.region = rect(Math.min(...zs), Math.max(...zs), Math.min(...ys), Math.max(...ys)); change(); } }, 'Dikdörtgen yap'),
+      ...flats.map(f => h('button', { class: 'btn', title: 'Tanınan özellikten bölge', onclick: () => {
+        if (f.type === 'pocket') { const r = f.dia / 2, n = 12; p.region = Array.from({ length: n }, (_, k) => ({ z: +(f.z + r * Math.cos(k * 2 * Math.PI / n)).toFixed(3), y: +(r * Math.sin(k * 2 * Math.PI / n)).toFixed(3) })); p.c = f.c; p.depth = f.depth; }
+        else if (f.type === 'flat') { const Rl = this.project.part.maxDia / 2, hh = Math.sqrt(Math.max(0, Rl * Rl - (Rl - f.depth) ** 2)) + rt + 0.3; p.region = rect(f.z0, f.z1, -hh, hh); p.c = f.c; p.depth = f.depth; }
+        else { const Rl = this.project.part.maxDia / 2, hh = Rl + rt + 0.3; p.region = rect(f.z0, f.z1, -hh, hh); p.c = f.c || 0; p.depth = +(Rl - f.af / 2).toFixed(3); }
+        change();
+      } }, `${FEATURE_LABELS[f.type]} ${featureText(f)}`)),
+      h('button', { class: 'btn', title: 'İki karşılıklı yüz: anahtar ağzı', onclick: () => {
+        const af = parseFloat(prompt('Anahtar ağzı (mm)', String(Math.round(this.project.part.maxDia * 0.8))) || '');
+        if (!(af > 0)) return;
+        const zs = p.region.map(q => q.z), z0 = Math.min(...zs), z1 = Math.max(...zs), Rl = this.project.part.maxDia / 2, hh = Rl + rt + 0.3;
+        p.region = rect(z0, z1, -hh, hh); p.depth = +(Rl - af / 2).toFixed(3);
+        const twin = clone(op); twin.id = makeOp(op.type).id; twin.params.c = ((+p.c || 0) + 180) % 360; twin.name = op.name + ' (karşı yüz)';
+        this.project.ops.splice(this.project.ops.indexOf(op) + 1, 0, twin);
+        change(); this.toast(`Anahtar ağzı ${af}: C${p.c || 0}° ve C${twin.params.c}° iki yüz`);
+      } }, 'Anahtar ağzı (2 yüz)'));
+    box.append(h('div', { class: 'tsec', style: { padding: '8px 0 2px' } }, 'Bölge (Y–Z düzlemi)'), cv,
+      h('div', { class: 'hint' }, 'Köşeyi sürükleyin · kenara çift tıklayınca köşe eklenir · köşeye sağ tıklayınca silinir. Takım merkezi bölgenin freze yarıçapı kadar içinden geçer.'),
+      tbl, presets);
+  }
+  /** Kaba planı: 1) alın 2) ana kaba 3) kalan bölgeler — her adımda en çok bölgeye erişen takım (önce tarettekiler) 4) kanal takımıyla dalma.
+   *  Tarette olmayan takımlar sırayla boş yuvalara atanır (yuva önizlemesi). */
+  roughPlan(st, { turns, cat, toolOf, Z, sameOnTurret }) {
+    const P = this.project, steps = [], warn = [];
+    const virtTools = [];
+    const gonePrev = new Set();
+    const keepIds = () => new Set([...(t1 && !String(st.t1).startsWith('cat:') ? [t1.id] : []), ...steps.filter(s => !s.virt).map(s => s.tool.id)]);
+    const slotPreview = (unit) => {
+      const save = P.tools; P.tools = [...save.filter(t => !gonePrev.has(t.id)), ...virtTools.map(v => ({ ...v, _virt: true }))];
+      try { const sl = this.slotFor(unit, { keep: keepIds() }); if (sl?.replaceId) gonePrev.add(sl.replaceId); return sl; } finally { P.tools = save; }
+    };
+    const off = st.off || new Set(), vMap = new Map();
+    // on = false: kapalı adımın takımı yuva almaz (takılmaz); aynı hazır takım (preset) birden çok adımda tek kez takılır
+    const mk = (virt, tool, preset, on = true) => {
+      if (!virt) return { virt: false, tool };
+      if (vMap.has(preset)) return vMap.get(preset);
+      if (!on) return { virt: true, tool: { ...tool, unit: preset.unit || 'gang' }, preset, slot: null };
+      // kullanılmayan takımın yerine: aynı T numarası ve konum
+      const slot = preset._replace ? { num: preset.num, offset: preset.offset ?? preset.num, yPos: preset.yPos, xPos: preset.xPos, replace: preset._replaceName, replaceId: preset._replace } : slotPreview(preset.unit || 'gang');
+      if (!slot) { warn.push(`${tool.name}: ${UNITS[preset.unit || 'gang']?.label || 'ünite'} dolu, bütün takımları kullanılıyor — bu adım için takım takılamaz`); const r = { virt: true, tool: { ...tool, unit: preset.unit || 'gang' }, preset, slot: null, full: true }; vMap.set(preset, r); return r; }
+      const vt = { ...tool, num: slot.num, offset: slot.offset ?? slot.num, yPos: slot.yPos, ...(slot.xPos != null ? { xPos: slot.xPos } : {}), unit: preset.unit || 'gang' };
+      virtTools.push(vt);
+      const r = { virt: true, tool: vt, preset, slot };
+      vMap.set(preset, r);
+      return r;
+    };
+    const t1 = toolOf(st.t1), t1virt = String(st.t1).startsWith('cat:');
+    const c1 = t1virt ? cat.find(c => c.t.id === st.t1) : null;
+    const main = mk(t1virt, t1, c1?.it.p, !(off.has('face') && off.has('rough')));
+    // 1) alın: mevcut alın işleminin tornalama takımı, yoksa ana kaba takımı
+    const fo = P.ops.find(o => o.type === 'face');
+    const ft = fo && P.tools.find(t => t.id === fo.toolId && t.type === 'turn');
+    steps.push({ kind: 'face', key: 'face', ...(ft ? { virt: false, tool: ft } : main), title: 'Alın tornalama', desc: `Ön yüz${st.faceAllow ? ` · finiş payı ${st.faceAllowV} mm` : ' · ölçüsüne (pay yok)'}` });
+    // 2) ana kaba
+    steps.push({ kind: 'rough', key: 'rough', ...main, title: 'Kaba tornalama', desc: `Bütün profil · paso ${st.ap} mm · f ${st.feed}` });
+    // 3) kalan bölgeler: yakın bölgeler birleşir (arası < 1 mm)
+    const merge = (zs) => { const out = []; for (const z of zs) { const l = out[out.length - 1]; if (l && z.z0 - l.z1 < 1) { l.z1 = z.z1; l.depth = Math.max(l.depth, z.depth); } else out.push({ ...z }); } return out; };
+    let rest = merge(Z(t1));
+    const used = new Set([t1.id]);
+    const covers = (t, z) => !Z(t).some(q => q.z1 > z.z0 + 0.01 && q.z0 < z.z1 - 0.01);
+    for (let pass = 0; pass < 3 && rest.length; pass++) {
+      const cands = [...turns.map(t => ({ virt: false, t })), ...cat.filter(c => !sameOnTurret(c.t))].filter(c => !used.has(c.t.id));
+      let best = null;
+      for (const c of cands) {
+        const n = rest.filter(z => covers(c.t, z)).length;
+        if (!n) continue;
+        const key = [n, c.virt ? 0 : 1, c.t.insertAngle || 35];   // çok bölge > tarette olan > güçlü kenar
+        if (!best || key[0] > best.key[0] || (key[0] === best.key[0] && (key[1] > best.key[1] || (key[1] === best.key[1] && key[2] > best.key[2])))) best = { c, key };
+      }
+      if (!best) break;
+      const c = best.c, got = rest.filter(z => covers(c.t, z));
+      used.add(c.t.id);
+      const s = mk(c.virt, c.t, c.it?.p, !off.has('rest:' + c.t.id));
+      steps.push({ kind: 'rest', key: 'rest:' + c.t.id, ...s, zones: got, title: 'Kaba (kalan bölgeler)', desc: got.map(z => `Z ${+z.z0.toFixed(1)}–${+z.z1.toFixed(1)}`).join(', ') });
+      rest = rest.filter(z => !got.includes(z));
+    }
+    // 4) kanal takımı: tornalama ucunun erişemediği bölgeler (genişlik sığıyorsa dalarak)
+    if (rest.length) {
+      const gOn = P.tools.filter(t => t.type === 'groove' && t.channel === 1);
+      const gCat = (TOOL_CATALOG.find(g => g.items.some(it => it.p.type === 'groove'))?.items || []).map(it => ({ it, t: makeTool({ ...it.p, num: 0 }) }));
+      const fit = (w) => rest.filter(z => w <= z.z1 - z.z0 + 0.1 - 1e-6);   // işlem bölgeyi ±0.05 genişletir; kanal ≥ takım genişliği olmalı
+      const onBest = gOn.map(t => ({ t, n: fit(t.width || 2).length })).sort((a, b) => b.n - a.n || (b.t.width || 0) - (a.t.width || 0))[0];
+      const catBest = gCat.map(c => ({ c, n: fit(c.t.width || 2).length })).sort((a, b) => b.n - a.n || (b.c.t.width || 0) - (a.c.t.width || 0))[0];
+      let s = null;
+      if (onBest && onBest.n && onBest.n >= (catBest?.n || 0)) s = mk(false, onBest.t);
+      else if (catBest && catBest.n) s = mk(true, catBest.c.t, catBest.c.it.p, !off.has('groove'));
+      if (s) {
+        const got = fit(s.tool.width || 2);
+        steps.push({ kind: 'groove', key: 'groove', ...s, zones: got, title: 'Kanal (kalan köşeler)', desc: got.map(z => `Z ${+z.z0.toFixed(1)}–${+z.z1.toFixed(1)}`).join(', ') + ` · ${s.tool.width} mm dalma` });
+        rest = rest.filter(z => !got.includes(z));
+      }
+      if (rest.length) warn.push(`${rest.length} bölgeye (${rest.map(z => `Z ${+z.z0.toFixed(1)}–${+z.z1.toFixed(1)}`).join(', ')}) hiçbir tornalama/kanal takımı erişemiyor; malzeme kalır.`);
+    }
+    // 5) tanınan geometriler: diş, delik, çapraz delik, frezeleme, karşı iş mili
+    // tornalama adımlarının taretteki takımları özellik planında sökülmez
+    const fp = featurePlan(P, st.mat, new Set(steps.filter(x => !x.virt).map(x => x.tool.id)));
+    for (const s of fp.steps) {
+      const m = s.tool ? { virt: false, tool: s.tool } : mk(true, makeTool({ ...s.preset, num: 0 }), s.preset, !off.has(s.key));
+      steps.push({ kind: 'feat', ...s, ...m });
+    }
+    warn.push(...fp.warn);
+    // 6) kesme yoksa: parça kesilir, çubuk ilerletilir (tam çevrim)
+    if (!P.ops.some(o => o.type === 'cutoff')) {
+      const ct = P.tools.filter(t => t.type === 'cutoff' && t.channel === 1).sort((a, b) => a.width - b.width)[0];
+      const it = TOOL_CATALOG.flatMap(g => g.items).find(x => x.p.type === 'cutoff' && x.p.width === 2);
+      const m = ct ? { virt: false, tool: ct } : mk(true, makeTool({ ...it.p, num: 0 }), it.p, !off.has('cutoff'));
+      steps.push({ kind: 'cutoff', key: 'cutoff', ...m, title: 'Kesme ve çubuk ilerletme', desc: `${m.tool.width} mm kesme kateri · parça ayrılır` });
+    }
+    for (const s of steps) s.off = off.has(s.key);
+    return { steps, warn };
+  }
+  /** Kaba planını uygula: takılacak takımları tarete tak, alın + kaba + kalan + kanal işlemlerini sırayla yaz */
+  applyRough(st) {
+    const P = this.project;
+    const plan = st.plan;
+    if (!plan) return;
     P.stock.material = st.mat;
+    const on = plan.steps.filter(s => !s.off && !(s.virt && !s.slot));
+    if (!on.length) { this.toast('Bütün adımlar kapalı: oluşturulacak işlem yok', 3000); return; }
+    // takılacak takımlar (aynı sanal takım birden çok adımda olabilir: alın + ana kaba, punta birden çok delikte); kapalı adımın takımı takılmaz
+    const mounted = new Map();
+    const real = (s) => {
+      if (!s.virt) return s.tool;
+      if (mounted.has(s.tool)) return mounted.get(s.tool);
+      const { _replace, _replaceName, ...preset } = s.preset;
+      // önizlemede gösterilen yuva aynen kullanılır (gerçek istasyon; doluysa kullanılmayan takımın yeri)
+      const sl = s.slot;
+      if (sl.replaceId) P.tools = P.tools.filter(x => x.id !== sl.replaceId);   // kullanılmayan takım sökülür, yerine takılır
+      const { num, offset, yPos, xPos } = sl;
+      const t = makeTool({ ...preset, num, offset: offset ?? num, yPos, ...(xPos != null ? { xPos } : {}) });
+      P.tools.push(t); mounted.set(s.tool, t); return t;
+    };
+    const tools = new Map(on.map(s => [s, real(s)]));
     const params = { strategy: st.strategy, ap: st.ap, feed: st.feed, vc: st.vc, allowX: st.allowX, allowZ: st.allowZ, retract: st.retract, contourPass: st.contourPass, maxRpm: st.maxRpm };
-    const olds = P.ops.filter(o => o.type === 'rough');
-    let at = olds.length ? P.ops.indexOf(olds[0]) : (() => { const f = P.ops.map(o => o.type).lastIndexOf('face'); if (f >= 0) return f + 1; const c = P.ops.findIndex(o => OP_TYPES[o.type].channel === 1 && !['face'].includes(o.type)); return c >= 0 ? c : P.ops.filter(o => OP_TYPES[o.type].channel === 1).length; })();
-    for (const o of olds) P.ops.splice(P.ops.indexOf(o), 1);
-    const t1 = P.tools.find(t => t.id === st.t1);
-    const main = makeOp('rough', st.t1); main.params = { ...main.params, ...params }; main.name = `Kaba Tornalama T${String(t1.num).padStart(2, '0')}`;
-    const add = [main];
-    if (st.t2 && zones.length) {
-      // yakın bölgeleri birleştir (arası < 1 mm)
-      const zs = [];
-      for (const z of zones) { const l = zs[zs.length - 1]; if (l && z.z0 - l.z1 < 1) l.z1 = z.z1; else zs.push({ ...z }); }
-      const t2 = P.tools.find(t => t.id === st.t2);
-      const s2 = suggestRough(st.mat, t2, P.stock.barDia, st.maxRpm);
-      for (const z of zs) {
-        const op = makeOp('rough', st.t2);
-        op.params = { ...op.params, ...params, ap: Math.min(st.ap, s2.ap), feed: Math.min(st.feed, s2.feed), zMin: +(z.z0 - 0.5).toFixed(3), zMax: +(z.z1 + 0.5).toFixed(3) };
-        op.name = `Kaba (kalan) T${String(t2.num).padStart(2, '0')} Z${+z.z0.toFixed(1)}–${+z.z1.toFixed(1)}`;
-        add.push(op);
+    // açık adımların yerini alacağı eski işlemler: alın, kaba, sihirbazın kanalları, aynı özelliğin işlemleri
+    const has = (k) => on.some(s => s.kind === k);
+    const feats = new Set(on.filter(s => s.kind === 'feat').map(s => s.type + ':' + s.featureId));
+    const isOld = (o) => (o.type === 'face' && has('face')) || (o.type === 'rough' && (has('rough') || has('rest'))) || (o.type === 'groove' && o.auto === 'rough' && has('groove'))
+      || (o.params?.featureId != null && feats.has(o.type + ':' + o.params.featureId));
+    const nOld = P.ops.filter(isOld).length;
+    P.ops = P.ops.filter(o => !isOld(o));
+    const Tn = (t) => toolNo(t);
+    const turnOps = [], frontOps = [], backOps = [];
+    for (const s of on) {
+      const t = tools.get(s);
+      if (s.kind === 'face') {
+        const op = makeOp('face', t.id); op.params.allow = st.faceAllow ? st.faceAllowV : 0; op.name = `Alın Tornalama ${Tn(t)}`; turnOps.push(op);
+      } else if (s.kind === 'rough') {
+        const op = makeOp('rough', t.id); op.params = { ...op.params, ...params }; op.name = `Kaba Tornalama ${Tn(t)}`; turnOps.push(op);
+      } else if (s.kind === 'rest') {
+        const sg = suggestRough(st.mat, t, P.stock.barDia, st.maxRpm);
+        for (const z of s.zones) {
+          const op = makeOp('rough', t.id);
+          op.params = { ...op.params, ...params, ap: Math.min(st.ap, sg.ap), feed: Math.min(st.feed, sg.feed), zMin: +(z.z0 - 0.5).toFixed(3), zMax: +(z.z1 + 0.5).toFixed(3) };
+          op.name = `Kaba (kalan) ${Tn(t)} Z${+z.z0.toFixed(1)}–${+z.z1.toFixed(1)}`; turnOps.push(op);
+        }
+      } else if (s.kind === 'groove') {
+        for (const z of s.zones) {
+          const op = makeOp('groove', t.id); op.auto = 'rough';
+          op.params.z0 = +Math.max(0, z.z0 - 0.05).toFixed(3); op.params.z1 = +(z.z1 + 0.05).toFixed(3);
+          op.name = `Kanal (kalan) ${Tn(t)} Z${+z.z0.toFixed(1)}–${+z.z1.toFixed(1)}`; turnOps.push(op);
+        }
+      } else if (s.kind === 'cutoff') {
+        P.ops.push(makeOp('cutoff', t.id, {}, `Kesme ${Tn(t)}`));
+        if (!P.ops.some(o => o.type === 'rechuck')) P.ops.push(makeOp('rechuck'));
+      } else {
+        const op = makeOp(s.type, t.id, { featureId: s.featureId, ...(s.params || {}) }, `${s.name} ${Tn(t)}`);
+        (s.side === 'back' ? backOps : frontOps).push(op);
       }
     }
-    P.ops.splice(Math.min(at, P.ops.length), 0, ...add);
+    // tornalama: $1 listesinin en başına (alın her zaman ilk işlem)
+    const ch1 = P.ops.filter(o => OP_TYPES[o.type].channel === 1);
+    P.ops.splice(ch1.length ? P.ops.indexOf(ch1[0]) : P.ops.length, 0, ...turnOps);
+    // delme/frezeleme: tornalama ve finişten sonra, kesme / parça almadan önce
+    const stopAt = P.ops.findIndex(o => ['pickoff', 'cutoff', 'rechuck'].includes(o.type));
+    const turnT = ['face', 'rough', 'finish', 'groove', 'thread'];
+    let after = -1; P.ops.forEach((o, i) => { if (turnT.includes(o.type) && (stopAt < 0 || i < stopAt)) after = i; });
+    let at = after + 1; if (stopAt >= 0) at = Math.min(at, stopAt);
+    P.ops.splice(at, 0, ...frontOps);
+    // karşı iş mili: parça alma yoksa eklenir; arka işlemler kesmeden sonra, parça atmadan önce
+    if (backOps.length) {
+      const cut = P.ops.findIndex(o => o.type === 'cutoff');
+      if (!P.ops.some(o => o.type === 'pickoff')) P.ops.splice(cut >= 0 ? cut : P.ops.length, 0, makeOp('pickoff'));
+      let ej = P.ops.findIndex(o => o.type === 'eject');
+      if (ej < 0) { const re = P.ops.findIndex(o => o.type === 'rechuck'); ej = re >= 0 ? re : P.ops.length; P.ops.splice(ej, 0, makeOp('eject')); }
+      P.ops.splice(ej, 0, ...backOps);
+    }
+    const add = [...turnOps, ...frontOps, ...backOps];
     this.closeModal();
-    this.sel = { kind: 'op', id: main.id };
+    this.sel = { kind: 'op', id: (turnOps[1] || add[0]).id };
     this.recalc(true);
-    this.toast(`${add.length} kaba işlemi ${olds.length ? 'güncellendi' : 'eklendi'}${add.length > 1 ? ' (ikinci takım kalan bölgeleri işler)' : ''}`, 4000);
+    this.toast(`${add.length} işlem ${nOld ? 'güncellendi' : 'oluşturuldu'}${mounted.size ? ` · ${mounted.size} takım tarete takıldı (${[...mounted.values()].map(Tn).join(', ')})` : ''}`, 4500);
+  }
+  /** Parça bırakma makrosu: $2 listesinin en sonuna (çubuk ilerletmeden önce); parça alma yoksa o da eklenir */
+  addRelease() {
+    const P = this.project;
+    let ej = P.ops.find(o => o.type === 'eject');
+    if (ej) { this.sel = { kind: 'op', id: ej.id }; this.renderTree(); return; }
+    const notes = [];
+    if (!P.ops.some(o => o.type === 'cutoff')) { this.toast('Önce kesme işlemi gerekli: parça kesilip karşı iş miline alınmadan bırakılamaz', 4500); return; }
+    if (!P.ops.some(o => o.type === 'pickoff')) {
+      P.ops.splice(P.ops.findIndex(o => o.type === 'cutoff'), 0, makeOp('pickoff', null, {}, 'Senkron alma (karşı mile al)'));
+      notes.push('senkron alma da eklendi');
+    }
+    ej = makeOp('eject', null, {}, 'Parça bırakma');
+    const re = P.ops.findIndex(o => o.type === 'rechuck');
+    P.ops.splice(re >= 0 ? re : P.ops.length, 0, ej);
+    this.sel = { kind: 'op', id: ej.id };
+    this.recalc(true);
+    const air = P.post.codes.airBlowOn ? '' : ' · hava üfleme M kodu Post Ayarları’ndan girilince üfleme de yazılır';
+    this.toast(`Parça bırakma eklendi${notes.length ? ' (' + notes.join(', ') + ')' : ''}: pens açılır, itici parçayı atar${air}`, 5500);
   }
   /** Senkron alma: karşı iş mili ana mille aynı eksende, aynı devirde (M senkron) parçayı tutar; kesmeden sonra çeker */
   openSync() {
@@ -904,26 +1313,76 @@ export class App {
     return true;
   }
   /** Katalogdan takım: ünitenin boş numarası ve yanındaki boş montaj yeri */
+  /** Yeni takım için yuva: ünitenin boş T numarası ve komşu takımlardan uzak montaj konumu (Y) */
+  /** Yeni takımın yeri (STATIONS, makine çizimi): ilk boş istasyon; T no ünitenin aralığından.
+   *  Ön delme kolonu T35: aynı T no, ofset = kat (T3501…T3503), kat konumu xPos. Arka ünite ve arka kovan aynı X2 sırasında. */
+  slotFor(unit, { keep = null } = {}) {
+    // Makinedeki gerçek istasyonlar dışına takım konmaz (makine çizimi: gang 6, çapraz 4, T35 3 kat, arka 4).
+    // Ünite doluysa programda kullanılmayan bir takımın yeri verilir (replaceId); o da yoksa null.
+    const P = this.project, T = P.tools;
+    const UN = unit === 'rear' ? 'back' : unit;
+    const row = UN === 'back' ? ['back', 'rear'] : [UN];
+    const freeNum = ([a, b]) => { for (let n = a; n <= b; n++) if (!T.some(t => t.num === n)) return n; return null; };
+    if (UN === 'front') {
+      const st = STATIONS.front, col = T.filter(t => t.unit === 'front' && t.num === 35);
+      const k = st.xPos.findIndex((x, i) => !col.some(t => (t.offset ?? t.num) === i + 1));
+      if (k >= 0) return { num: 35, offset: k + 1, yPos: st.yPos, xPos: st.xPos[k] };
+    } else {
+      const same = T.filter(t => row.includes(t.unit)).map(t => t.yPos);
+      const pitch = UN === 'gang' ? 17 : 29;
+      const yPos = (STATIONS[UN] || []).find(y => same.every(q => Math.abs(q - y) >= pitch - 1e-6));
+      const num = freeNum(UNIT_NUMS[UN] || [1, 99]);
+      if (yPos != null && num != null) return { num, offset: num, yPos, xPos: 0 };
+    }
+    const used = new Set(P.ops.map(o => o.toolId));
+    const g = T.find(t => row.includes(t.unit) && !t._virt && !used.has(t.id) && !keep?.has(t.id));
+    if (!g) return null;
+    return { num: g.num, offset: g.offset ?? g.num, yPos: g.yPos, xPos: g.xPos, replaceId: g.id, replace: g.name };
+  }
   addToolFrom(preset) {
-    const P = this.project, unit = preset.unit;
-    const [a, b] = UNIT_NUMS[unit] || [1, 99];
-    let num = a; while (P.tools.some(t => t.num === num) && num < b) num++;
-    if (P.tools.some(t => t.num === num)) num = Math.max(...P.tools.map(t => t.num)) + 1;
-    const same = P.tools.filter(t => t.unit === unit).map(t => t.yPos);
-    const def = { gang: 110, cross: -20, front: 38, rear: 40, back: -20 }[unit] ?? 0;
-    const yPos = !same.length ? def : unit === 'gang' || unit === 'cross' ? Math.min(...same) - 18 : Math.max(...same) + 20;
-    const t = makeTool({ ...preset, num, yPos: preset.yPos ?? yPos });
+    const P = this.project;
+    const slot = this.slotFor(preset.unit);
+    if (!slot) { this.toast(`${UNITS[preset.unit].label} dolu ve bütün takımları programda kullanılıyor — makinede başka istasyon yok. Önce bir takımı çıkarın.`, 6000); return null; }
+    const { num, offset, yPos, xPos, replaceId, replace } = slot;
+    if (replaceId) P.tools = P.tools.filter(x => x.id !== replaceId);
+    const t = makeTool({ ...preset, num, offset, yPos, ...(xPos != null ? { xPos } : {}) });
     P.tools.push(t);
     this.recalc(true);
-    this.toast(`T${String(num).padStart(2, '0')} ${t.name} eklendi — montaj konumunu (Y) kontrol edin`, 3500);
+    this.toast(replaceId ? `${toolNo(t)} ${t.name} takıldı — istasyonlar dolu olduğu için kullanılmayan ${replace} söküldü` : `${toolNo(t)} ${t.name} eklendi`, replaceId ? 6000 : 3500);
     return t;
+  }
+  /** Eksik matkabı ilgili üniteye tak ve işleme ata (mesajlardaki "tak" düğmesi) */
+  mountNeeded(opId, need) {
+    const P = this.project, op = P.ops.find(o => o.id === opId);
+    if (!op) return;
+    const d = need.dia, live = need.type === 'ldrill';
+    const name = `${live ? 'Tahrikli Matkap' : need.unit === 'back' ? 'Arka Matkap' : 'Matkap'} Ø${d}`;
+    const preset = live ? { name, type: 'ldrill', unit: 'cross', dia: d, vc: Math.round(45 + d * 4), fz: +(0.01 + d * 0.006).toFixed(3), flutes: 2 }
+      : { name, type: 'drill', unit: need.unit, dia: d, vc: Math.round(45 + Math.min(d, 8) * 3), feed: +Math.min(0.2, 0.02 + d * 0.01).toFixed(3) };
+    // istasyon doluysa bu programda kullanılmayan takımın yerine (strok dışına yeni yuva açılmaz)
+    const row = need.unit === 'back' ? ['back', 'rear'] : [preset.unit];
+    const cap = { gang: STATIONS.gang.length, cross: STATIONS.cross.length, front: STATIONS.front.xPos.length, back: STATIONS.back.length }[need.unit === 'back' ? 'back' : preset.unit];
+    let slot, gone = null;
+    if (P.tools.filter(x => row.includes(x.unit)).length >= cap) {
+      gone = P.tools.find(x => row.includes(x.unit) && !P.ops.some(o => o.toolId === x.id));
+      if (!gone) { this.toast(`${UNITS[preset.unit].label} dolu ve bütün takımları programda kullanılıyor: takım ekleyemem. Takımlar penceresinden birini çıkarın.`, 5000); return; }
+      P.tools = P.tools.filter(x => x !== gone);
+      slot = { num: gone.num, offset: gone.offset ?? gone.num, yPos: gone.yPos, xPos: gone.xPos };
+    } else slot = this.slotFor(preset.unit);
+    const { num, offset, yPos, xPos } = slot;
+    const t = makeTool({ ...preset, num, offset, yPos: preset.yPos ?? yPos, ...(xPos != null ? { xPos } : {}) });
+    P.tools.push(t);
+    op.toolId = t.id;
+    this.sel = { kind: 'op', id: op.id };
+    this.recalc(true);
+    this.toast(`${toolNo(t)} ${t.name} tarete takıldı${gone ? ` (kullanılmayan ${gone.name} söküldü)` : ''} ve “${op.name}” işlemine atandı — montaj konumunu kontrol edin`, 5000);
   }
   /** Takım ayarları: bölümlere ayrılmış, yalnız takım tipine uygun alanlar */
   renderToolDetail(box, t) {
     const P = this.project;
     const change = (key) => { this.toolChanged(t, key); };
     const turn = t.type === 'turn', rot = isRotaryTool(t), blade = t.type === 'groove' || t.type === 'cutoff';
-    const left = h('div', { class: 'td-side' }, h('img', { class: 'td-img', src: toolThumb(t), alt: '' }));
+    const left = h('div', { class: 'td-side' }, h('div', { class: 'td-img', html: toolArt(t) }), h('div', { class: 'td-3d' }, h('img', { src: toolThumb(t), alt: '3D' }), h('small', {}, '3D model')));
     if (turn) left.append(h('div', { class: 'insprev', html: insertSvg(t) }));
     const used = P.ops.filter(o => o.toolId === t.id);
     left.append(h('div', { class: 'td-used' }, h('b', {}, used.length ? used.length + ' işlemde kullanılıyor' : 'Hiçbir işlemde kullanılmıyor'), ...used.map(o => h('small', {}, '· ' + o.name))));
@@ -1104,6 +1563,8 @@ export class App {
       case 'output': this.openOutput(); break;
       case 'tools': this.openTools(); break;
       case 'rough': this.openRough(); break;
+      case 'finishw': this.openFinish(); break;
+      case 'fin': this.fin.toggle(); break;
       case 'theme': this.cfg.theme = this.cfg.theme === 'light' ? 'dark' : 'light'; this.setCfg('theme'); break;
       case 'settings': this.openSettings(); break;
       case 'tour': this.tour.start(); break;
@@ -1138,11 +1599,20 @@ export class App {
   }
 
   // ------------------------------------------------------------ işlemler
-  addOp(type) {
+  addOp(type, preset = null) {
     const P = this.project;
     const def = OP_TYPES[type];
     const tool = def.tools.length ? P.tools.find(t => def.tools.includes(t.type) && t.channel === def.channel) : null;
     const op = makeOp(type, tool?.id ?? null);
+    if (type === 'areaMill') {
+      // en küçük parmak freze; bölge parçanın ortasında, frezenin en az iki katı genişlikte
+      const em = P.tools.filter(t => t.type === 'endmill' && t.channel === 1).sort((a, b) => a.dia - b.dia)[0];
+      if (em) op.toolId = em.id;
+      const L = P.part.length, R = P.part.maxDia / 2, d = em?.dia || 4;
+      const z0 = +(L * 0.35).toFixed(2), z1 = +Math.min(L - 0.5, z0 + Math.max(2.4 * d, L * 0.3)).toFixed(2), w = +Math.max(1.3 * d, R * 0.7).toFixed(2);
+      op.params.region = [{ z: z0, y: -w }, { z: z1, y: -w }, { z: z1, y: w }, { z: z0, y: w }];
+      op.params.depth = +Math.min(1, R * 0.2).toFixed(2);
+    }
     const featType = (OP_PARAMS[type].find(p => p[0] === 'featureId') || [])[2];
     if (featType) {
       const [, ft, side] = featType.split(':');
@@ -1150,6 +1620,8 @@ export class App {
       const f = P.part.features.find(x => x.type === ft && (!side || x.side === side) && !used.has(x.id)) || P.part.features.find(x => x.type === ft && (!side || x.side === side));
       if (f) op.params.featureId = f.id;
     }
+    // bitmiş parçada seçilen yüzeyden gelen ön ayarlar (bölge, özellik, takım)
+    if (preset) { if (preset.toolId) op.toolId = preset.toolId; Object.assign(op.params, preset.params || {}); }
     // konum: $1 işlemleri kesmeden önce, $2 işlemleri sona (atmadan önce)
     let idx = P.ops.length;
     if (def.channel === 1 && type !== 'rechuck') {
@@ -1206,7 +1678,7 @@ export class App {
           h('div', { class: 'ch', onclick: pick('op', op.id, () => { if (ot && this.sel.kind === 'op') this.seek(ot.t0); this.applyPathVis(true); }) },
             h('span', { class: 'no' }, String(no)),
             h('span', { class: 'oi' }, OP_ICONS[op.type] || '›'),
-            h('span', { class: 'tx' }, h('b', {}, op.name), h('small', {}, [tool ? 'T' + String(tool.num).padStart(2, '0') + ' ' + tool.name : OP_TYPES[op.type].label, ot ? (ot.t1 - ot.t0).toFixed(1) + ' s' : ''].filter(Boolean).join(' · '))),
+            h('span', { class: 'tx' }, h('b', {}, op.name), h('small', {}, [tool ? toolNo(tool) + ' ' + tool.name : OP_TYPES[op.type].label, ot ? (ot.t1 - ot.t0).toFixed(1) + ' s' : ''].filter(Boolean).join(' · '))),
             bad ? h('span', { class: 'bad', title: 'Bu işlemde hata var' }, '!') : null,
             eye, h('label', { class: 'sw mini', onclick: (e) => e.stopPropagation() }, sw, h('i'))));
         card.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/op', op.id); card.classList.add('dragging'); });
@@ -1226,6 +1698,14 @@ export class App {
         grp.append(card);
       }
       tree.append(grp);
+      if (ch === 2) {
+        // $2 listesinin sonu: parça bırakma makrosu (çevrim sonunda parça makinedeki bırakma alanına atılır)
+        const ej = P.ops.find(o => o.type === 'eject');
+        tree.append(h('button', { class: 'syncbtn' + (ej ? ' on' : ''), id: 'btnRelease', onclick: () => this.addRelease() },
+          h('span', { class: 'si' }, '⤓'), h('span', { class: 'tx' }, h('b', {}, 'Parça bırakma'),
+            h('small', {}, ej ? `X2 ${ej.params.dropX ?? 0}${ej.params.dropZ != null && ej.params.dropZ !== '' ? ' · Z2 ' + ej.params.dropZ : ''} · hava ${ej.params.blow ?? 0.5} s · ${ej.params.ejector !== false ? 'itici' : 'itici yok'} — ayarlar için tıklayın` : 'Çevrim sonunda parçayı bırakma alanına üfleyerek at')),
+          h('span', { class: 'plus' }, ej ? '›' : '+')));
+      }
       if (ch === 1) {
         // $1 ile $2 arası: senkron alma (karşı iş milini hizala, devri eşitle, parçayı tut, kesmeden sonra al)
         const pk = P.ops.find(o => o.type === 'pickoff' && o.enabled);
@@ -1263,7 +1743,7 @@ export class App {
     const groups = [
       ['Tornalama', ['face', 'rough', 'finish', 'groove', 'thread', 'cutoff']],
       ['Delme', ['center', 'drill', 'tap', 'crossDrill']],
-      ['Frezeleme (C/Y)', ['flatMill', 'polygonMill', 'pocketMill', 'cylSlot', 'engrave']],
+      ['Frezeleme (C/Y)', ['areaMill', 'flatMill', 'polygonMill', 'pocketMill', 'cylSlot', 'engrave']],
       ['Karşı iş mili', ['pickoff', 'backTurn', 'backDrill', 'backTap', 'backSlot', 'backPolar', 'eject']],
       ['Çubuk', ['rechuck', 'midRechuck']],
     ];
@@ -1300,7 +1780,7 @@ export class App {
       const g = h('div', { class: 'fg' });
       g.append(field(op, 'name', 'İşlem adı', '', 'text', () => this.renderTree(), { full: true }));
       if (def.tools.length) {
-        const items = [['', '— seçin —'], ...P.tools.filter(t => def.tools.includes(t.type) && t.channel === def.channel).map(t => [t.id, `T${String(t.num).padStart(2, '0')} ${t.name}`])];
+        const items = [['', '— seçin —'], ...P.tools.filter(t => def.tools.includes(t.type) && t.channel === def.channel).map(t => [t.id, `${toolNo(t)} ${t.name}`])];
         g.append(field(op, 'toolId', 'Takım', '', 'select:x', change, { items, full: true }));
       }
       for (const [k, label, unit] of OP_PARAMS[op.type]) {
@@ -1312,6 +1792,8 @@ export class App {
         else g.append(field(op.params, k, label, unit === 'bool' ? '' : unit, unit === 'bool' ? 'bool' : unit === 'adet' ? 'int' : 'num', change));
       }
       body.append(g);
+      if (['flatMill', 'polygonMill', 'areaMill'].includes(op.type)) this.millPatternPicker(body, op, change);
+      if (op.type === 'areaMill') this.regionEditor(body, op, change);
       if (['face', 'rough', 'finish', 'groove'].includes(op.type)) {
         // iş mili devri: G96 sabit kesme hızı + G50 sınırı ya da G97 sabit devir
         const tl = P.tools.find(t => t.id === op.toolId);
@@ -1393,11 +1875,10 @@ export class App {
           h('div', { class: 'btnrow' }, h('button', { class: 'btn pri', onclick: () => { this.closeModal(); this.deriveFromCode(); } }, 'Koddan yeniden çıkar')));
       } else if (P.part.source === 'sketch') {
         body.append(h('div', { class: 'btnrow' }, h('button', { class: 'btn pri', onclick: () => {
-          const w = new Sketcher(this, { pts: P.part.sketch, name: P.part.name, features: P.part.features });
-          w.finish = () => { const err = validateSketch(w.pts); if (err.length) { this.toast(err[0], 4500); return; } const part = partFromSketch(w.pts, w.name, w.allFeatures()); this.closeModal(); new SetupWizard(this, { kind: 'sketch', part, edit: true, geomChanged: true, start: 'front' }).open(); };
-          w.open();
+          this.closeModal();
+          new Sketcher(this, { ents: P.part.sketch2 || entsFromPoints(P.part.sketch), name: P.part.name, features: P.part.features, edit: true }).open();
         } }, '✎ Çizimi düzenle')));
-        body.append(h('div', { class: 'kv' }, h('span', {}, 'Boy'), h('span', {}, P.part.length.toFixed(3)), h('span', {}, 'Maks. çap'), h('span', {}, P.part.maxDia.toFixed(3)), h('span', {}, 'Köşe noktası'), h('span', {}, String(P.part.sketch?.length || 0))));
+        body.append(h('div', { class: 'kv' }, h('span', {}, 'Boy'), h('span', {}, P.part.length.toFixed(3)), h('span', {}, 'Maks. çap'), h('span', {}, P.part.maxDia.toFixed(3)), h('span', {}, 'Çizim varlığı'), h('span', {}, String(P.part.sketch2?.length || P.part.sketch?.length || 0))));
       } else if (P.part.source !== 'step') {
         const rows = P.part.rows || [];
         const tbl = h('table', { class: 'pt' }, h('tr', {}, ...['Ø', 'Boy', 'Son Ø', 'Pah', 'R', ''].map(x => h('th', {}, x))));
@@ -1554,7 +2035,8 @@ export class App {
     for (const m of list) {
       const loc = m.path ? `$${m.path} satır ${m.line + 1}` : labels[m.src] || '';
       box.append(h('div', { class: 'msg ' + m.k, onclick: () => { if (m.path != null && m.line != null) this.seekLine(m.path, m.line); if (m.op) { this.sel = { kind: 'op', id: m.op }; this.renderTree(); } } },
-        h('span', { class: 'k' }, m.k === 'e' ? '✗' : m.k === 'w' ? '⚠' : '✓'), h('span', { class: 'src' }, loc || labels[m.src]), h('span', {}, m.msg)));
+        h('span', { class: 'k' }, m.k === 'e' ? '✗' : m.k === 'w' ? '⚠' : '✓'), h('span', { class: 'src' }, loc || labels[m.src]), h('span', {}, m.msg),
+        m.need && m.op ? h('button', { class: 'btn sm msg-fix', onclick: (ev) => { ev.stopPropagation(); this.mountNeeded(m.op, m.need); } }, `Ø${m.need.dia} ${m.need.type === 'ldrill' ? 'tahrikli matkap' : 'matkap'} tak`) : null));
     }
     const ne = list.filter(x => x.k === 'e').length;
     $('msgBadge').textContent = ne || list.filter(x => x.k === 'w').length;
@@ -1590,6 +2072,11 @@ export class App {
       this.openModal('3D parça açılamadı', h('div', { class: 'msg e' }, h('span', { class: 'k' }, '✗'), e.message));
     }
   }
+  /** Programla gelen örnek STEP parça (src/samples) */
+  async openSampleStep() {
+    const txt = (await import('../samples/spin-tite-insert.step?raw')).default;
+    await this.loadStep(new File([txt], 'Spin-tite insert.step'));
+  }
   async reviveToolModels() {
     const list = this.project.tools.filter(t => t.model && t.model.b64 && !customToolModels.has(t.id));
     for (const t of list) {
@@ -1616,11 +2103,13 @@ export class App {
     g.append(field(post, 'waitStart', 'Bekleme kodu başlangıcı (M)', '', 'int', () => {}));
     g.append(field(post, 'twoPath', 'İki kanal ($1/$2)', '', 'bool', () => {}));
     g.append(field(post, 'lineNumbers', 'Satır numarası (N)', '', 'bool', () => {}));
+    post.blockSkip ??= '/';
+    g.append(field(post, 'blockSkip', 'Kapalı işlem satır başı (blok atlama)', '', 'text', () => {}));
     g.append(field(post.spindleAddress, 'main', 'Ana iş mili adresi', '', 'text', () => {}));
     g.append(field(post.spindleAddress, 'sub', 'Karşı iş mili adresi', '', 'text', () => {}));
     g.append(field(post.spindleAddress, 'live', 'Tahrikli takım adresi', '', 'text', () => {}));
     g.append(field(post, 'toolCall', 'Takım çağırma şablonu', '', 'text', () => {}));
-    body.append(g);
+    body.append(g, h('div', { class: 'hint' }, 'Kapalı işlemler G-kodda silinmez; her satırın başına bu işaret konur. FANUC’ta standart blok atlama işareti tek “/”dur: panelde BLOCK SKIP (/) açıkken makine bu satırları okumaz, kapatılınca çalıştırır.'));
     body.append(h('div', { class: 'tsec', style: { padding: '8px 0 2px' } }, 'Sabit çevrimler'));
     body.append(h('div', { class: 'hint' }, 'Kapalıyken bütün hareketler açık yazılır (en güvenli; makine parametresinden bağımsız). Açarsanız simülasyon çevrimi FANUC kılavuzundaki biçimiyle açar — makinenizde kuru çalıştırma ile doğrulayın. G71/G70 bilinçli olarak yok: hareketi kontrol parametrelerine (5132/5133, tip I/II) bağlıdır, simülasyon garanti edemez.'));
     if (!post.cycles) post.cycles = { drill: false, rigidTap: false, thread: 'g92' };
@@ -1632,7 +2121,7 @@ export class App {
     cyc.append(field(post, 'workShift', 'İş kaydırması şablonu', '', 'text', () => {}));
     body.append(cyc);
     body.append(h('div', { class: 'tsec', style: { padding: '8px 0 2px' } }, 'M Kodları'));
-    const labels = { mainCW: 'Ana mil ileri', mainCCW: 'Ana mil geri', mainStop: 'Ana mil dur', subCW: 'Karşı mil ileri', subCCW: 'Karşı mil geri', subStop: 'Karşı mil dur', liveCW: 'Tahrikli ileri', liveCCW: 'Tahrikli geri', liveStop: 'Tahrikli dur', backLiveCW: 'Arka tahrikli ileri', backLiveCCW: 'Arka tahrikli geri', backLiveStop: 'Arka tahrikli dur', coolantOn: 'Soğutma aç', coolantOff: 'Soğutma kapa', backCoolantOn: 'Arka soğutma aç', backCoolantOff: 'Arka soğutma kapa', mainCAxisOn: 'C1 ekseni aç', mainCAxisOff: 'C1 ekseni kapa', subCAxisOn: 'C2 ekseni aç', subCAxisOff: 'C2 ekseni kapa', rigidTap: 'Rijit kılavuz (M29)', partCount: 'Parça sayacı (boş = yok)', mainChuckClose: 'Ana pens kapa', mainChuckOpen: 'Ana pens aç', subChuckClose: 'Karşı pens kapa', subChuckOpen: 'Karşı pens aç', spindleSync: 'Senkron aç', spindleSyncOff: 'Senkron kapa', cutoffCheck: 'Kesim kontrol', partEject: 'Parça atma', barFeedStart: 'Çubuk besleme başla', barFeedEnd: 'Çubuk besleme bitir', programEnd: 'Program sonu', optionalStop: 'Opsiyonel dur' };
+    const labels = { mainCW: 'Ana mil ileri', mainCCW: 'Ana mil geri', mainStop: 'Ana mil dur', subCW: 'Karşı mil ileri', subCCW: 'Karşı mil geri', subStop: 'Karşı mil dur', liveCW: 'Tahrikli ileri', liveCCW: 'Tahrikli geri', liveStop: 'Tahrikli dur', backLiveCW: 'Arka tahrikli ileri', backLiveCCW: 'Arka tahrikli geri', backLiveStop: 'Arka tahrikli dur', coolantOn: 'Soğutma aç', coolantOff: 'Soğutma kapa', backCoolantOn: 'Arka soğutma aç', backCoolantOff: 'Arka soğutma kapa', mainCAxisOn: 'C1 ekseni aç', mainCAxisOff: 'C1 ekseni kapa', subCAxisOn: 'C2 ekseni aç', subCAxisOff: 'C2 ekseni kapa', rigidTap: 'Rijit kılavuz (M29)', partCount: 'Parça sayacı (boş = yok)', mainChuckClose: 'Ana pens kapa', mainChuckOpen: 'Ana pens aç', subChuckClose: 'Karşı pens kapa', subChuckOpen: 'Karşı pens aç', spindleSync: 'Senkron aç', spindleSyncOff: 'Senkron kapa', cutoffCheck: 'Kesim kontrol', partEject: 'Parça atma (itici)', airBlowOn: 'Hava üfleme aç (boş = yok)', airBlowOff: 'Hava üfleme kapa', barFeedStart: 'Çubuk besleme başla', barFeedEnd: 'Çubuk besleme bitir', programEnd: 'Program sonu', optionalStop: 'Opsiyonel dur' };
     const cg = h('div', { class: 'codes' });
     for (const k of Object.keys(post.codes)) cg.append(field(post.codes, k, labels[k] || k, '', 'text', () => {}));
     body.append(cg);
@@ -1642,6 +2131,8 @@ export class App {
     body.append(ver);
     body.append(h('div', { class: 'tsec', style: { padding: '8px 0 2px' } }, 'Makine limitleri'));
     const mg = h('div', { class: 'fg' });
+    P.machine.guideBush ??= true;
+    mg.append(field(P.machine, 'guideBush', 'Kılavuz burçlu çalışma (kapalı = burçsuz, N.G.B.)', '', 'bool', () => {}, { full: true }));
     for (const [k, a] of Object.entries(P.machine.axes)) if (!k.startsWith('C')) { mg.append(field(a, 'min', k + ' min', 'mm', 'num', () => { a.estimated = false; })); mg.append(field(a, 'max', k + ' max', 'mm', 'num', () => { a.estimated = false; })); }
     mg.append(field(P.machine.mainSpindle, 'maxRpm', 'Ana mil maks.', 'dev/dak', 'int', () => {}));
     mg.append(field(P.machine.subSpindle, 'maxRpm', 'Karşı mil maks.', 'dev/dak', 'int', () => {}));
@@ -1680,7 +2171,7 @@ export class App {
 }
 
 // ------------------------------------------------------------ yardımcılar
-const OP_ICONS = { face: '⊣', rough: '▥', finish: '◜', groove: '⊔', thread: '≋', center: '▽', drill: '↧', tap: '⇊', cutoff: '✂', rechuck: '⇤', midRechuck: '⇆', crossDrill: '⊥', flatMill: '▭', polygonMill: '⬡', cylSlot: '◍', engrave: 'Ａ', pocketMill: '◎', pickoff: '⇥', backTurn: '◺', backDrill: '↤', backTap: '⇇', backSlot: '⊖', backPolar: '⬢', eject: '⏏' };
+const OP_ICONS = { areaMill: '▦', face: '⊣', rough: '▥', finish: '◜', groove: '⊔', thread: '≋', center: '▽', drill: '↧', tap: '⇊', cutoff: '✂', rechuck: '⇤', midRechuck: '⇆', crossDrill: '⊥', flatMill: '▭', polygonMill: '⬡', cylSlot: '◍', engrave: 'Ａ', pocketMill: '◎', pickoff: '⇥', backTurn: '◺', backDrill: '↤', backTap: '⇇', backSlot: '⊖', backPolar: '⬢', eject: '⏏' };
 /** Kesici uç önizlemesi (SVG): şekil, burun radyüsü, uç açısı */
 function insertSvg(t) {
   const p = insertOutline(t, 10), W = Math.max(...p.map(q => q[0])), H = Math.max(...p.map(q => q[1]));
@@ -1714,8 +2205,22 @@ function zoneSvg(part, zones) {
   return `<svg viewBox="0 0 ${W} ${H}" width="100%"><line x1="6" y1="${Y(0)}" x2="${W - 6}" y2="${Y(0)}" stroke="#6f7e8d" stroke-dasharray="8 3 2 3"/>${zr}<path d="${d}" fill="rgba(75,139,255,.18)" stroke="#6ea2ff" stroke-width="1.6"/><text x="${W - 10}" y="12" fill="#3ecf8e" font-size="10" text-anchor="end">ön alın (Z0)</text><text x="10" y="12" fill="#a7b4c2" font-size="10">L ${+L.toFixed(2)} · arka</text></svg>`;
 }
 function kindLabel(k) { return { rapid: 'G0', feed: 'G1', arc: 'G2/G3', thread: 'DİŞ', dwell: 'G4', wait: 'BEKLE', event: 'M' }[k] || ''; }
+/** Kart önizlemesi: parçanın tam kesiti (üst yarı kesit, alt yarı dış görünüş), etiketsiz; ön alın solda */
+function miniSectionSvg(part, W = 240, H = 90) {
+  const L = part.length, R = part.maxDia / 2, k = Math.min((W - 20) / L, (H - 12) / (2 * R)), x0 = (W - L * k) / 2, cy = H / 2;
+  const X = (z) => (x0 + z * k).toFixed(1), Y = (r) => (cy - r * k).toFixed(1);
+  const sec = sectionPoints(part).map(p => `${X(p.z)},${Y(p.r)}`).join(' ');
+  const outer = part.profile.map(p => `${X(p.z)},${(cy + p.r * k).toFixed(1)}`).join(' ');
+  return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" aria-hidden="true">
+<polygon points="${outer}" fill="rgba(138,153,168,.30)" stroke="rgba(207,214,223,.75)" stroke-width="1"/>
+<polygon points="${sec}" fill="url(#hatch)" stroke="#cfd6df" stroke-width="1.1"/>
+<defs><pattern id="hatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" fill="rgba(75,139,255,.28)"/><line x1="0" y1="0" x2="0" y2="5" stroke="rgba(110,162,255,.7)" stroke-width="1"/></pattern></defs>
+<line x1="4" y1="${cy}" x2="${W - 4}" y2="${cy}" stroke="#f59e0b" stroke-width=".8" stroke-dasharray="6 3 1.5 3"/></svg>`;
+}
 function fmtTime(s) { const m = Math.floor(s / 60); return `${m}:${String(Math.floor(s % 60)).padStart(2, '0')}.${String(Math.floor((s % 1) * 10))}`; }
 function colorize(src) {
+  // blok atlama satırı (kapalı işlem): BLOCK SKIP açıkken makine okumaz
+  if (/^\s*\//.test(src)) return `<span class="c-skip" title="Blok atlama (/): BLOCK SKIP açıkken makine bu satırı okumaz">${esc(src)}</span>`;
   // yorumları ayır, kalan kısmı tek geçişte renklendir
   return src.split(/(\([^)]*\))/).map(part => {
     if (part.startsWith('(')) return `<span class="c-cmt">${esc(part)}</span>`;

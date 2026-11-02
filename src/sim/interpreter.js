@@ -33,6 +33,8 @@ export function interpret(text, ctx) {
   const parsed = parseProgram(text);
   const errors = [], warnings = [];
   const toolByNum = new Map(tools.map(t => [t.num, t]));
+  // çok takımlı tutucu (aynı T no, farklı ofset: T3501, T3502): tam kodla eşleşir
+  const toolByCode = new Map(tools.map(t => [t.num * 100 + (t.offset ?? t.num), t]));
   const waitBase = profile.waitStart;
   const waitRe = new RegExp('^' + profile.waitCode.replace('{n}', '(\\d+)') + '$');
 
@@ -123,7 +125,7 @@ export function interpret(text, ctx) {
         if (isWo) S.wo = 'G' + wd.v;
         else {
           const num = Math.floor(wd.v / 100);
-          const t = toolByNum.get(num);
+          const t = toolByCode.get(Math.round(wd.v)) || toolByNum.get(num);
           if (!t) err(li, `Tanımsız takım T${wd.raw}`);
           else if (t.channel !== ch) err(li, `${t.name} ${ch}. kanalda kullanılamaz (takım ${t.channel}. kanalda)`);
           S.tool = t || null; S.toolCode = wd.raw;

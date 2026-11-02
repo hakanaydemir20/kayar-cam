@@ -42,7 +42,7 @@ describe('G2/G3 (G18, ZX düzlemi)', () => {
 
 describe('G19 helikal (YZ düzlemi, X çapta)', () => {
   it('yarım tur helis: X lineer iner, yay YZ düzleminde', () => {
-    const r = run(P1('M5\nM18\nT1212\nG98\nG97 S3=3000 M53\nG19\nG0 X12. Y2. Z10.\nG3 X11. Y-2. Z10. J-2. K0. F100.'));
+    const r = run(P1('M5\nM18\nT3434\nG98\nG97 S3=3000 M53\nG19\nG0 X12. Y2. Z10.\nG3 X11. Y-2. Z10. J-2. K0. F100.'));
     expect(r.errors).toEqual([]);
     const m = r.paths[0].moves.find(x => x.kind === 'arc');
     expect(m.arc.plane).toBe('yz');
@@ -52,7 +52,7 @@ describe('G19 helikal (YZ düzlemi, X çapta)', () => {
     expect(m.feed).toBe(100);
   });
   it('tahrikli takım dönmüyorsa hata', () => {
-    const r = run(P1('M5\nM18\nT1212\nG98\nG0 X12. Y0. Z10.\nG1 X10. F100.'));
+    const r = run(P1('M5\nM18\nT3434\nG98\nG0 X12. Y0. Z10.\nG1 X10. F100.'));
     expect(r.errors.some(e => /dönmüyor/.test(e.msg))).toBe(true);
   });
 });
@@ -89,7 +89,7 @@ describe('hata yakalama', () => {
     expect(r.errors.some(e => /Tanımsız takım/.test(e.msg))).toBe(true);
   });
   it('$2 takımı $1de kullanılamaz', () => {
-    const r = run(P1('T4141\nG0 X10.'));
+    const r = run(P1('T2121\nG0 X10.'));
     expect(r.errors.some(e => /kanalda/.test(e.msg))).toBe(true);
   });
   it('Z1 strok dışı hata', () => {

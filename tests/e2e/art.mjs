@@ -1,0 +1,12 @@
+import { chromium } from 'playwright';
+const out = process.argv[2] || '.';
+const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+const page = await (await browser.newContext({ viewport: { width: 1500, height: 900 } })).newPage();
+const errs = []; page.on('pageerror', e => errs.push(e.message));
+await page.goto('http://localhost:5173/'); await page.waitForTimeout(2000); await page.keyboard.press('Escape');
+await page.click('#btnTools'); await page.waitForTimeout(600);
+await page.screenshot({ path: out + '/a1.png' });
+await page.locator('.tcard.add').click(); await page.waitForTimeout(500);
+await page.screenshot({ path: out + '/a2.png' });
+console.log(errs.length ? errs.join('\n') : 'HATA YOK');
+await browser.close();

@@ -25,7 +25,7 @@ describe('örtüşen çevrim', () => {
   it('$2: arka işlemler ve atma, parça almadan ÖNCE', () => {
     const l2 = r.posted.paths[1];
     const iBack = l2.findIndex(s => /^\(ARKA DELME/.test(s));
-    const iEject = l2.findIndex(s => /^\(PARCA ATMA/.test(s));
+    const iEject = l2.findIndex(s => /^\(PARCA BIRAKMA/.test(s));
     const iPick = l2.findIndex(s => /^\(KARSI IS MILINE AL/.test(s));
     expect(iBack).toBeGreaterThan(0);
     expect(iBack).toBeLessThan(iEject);

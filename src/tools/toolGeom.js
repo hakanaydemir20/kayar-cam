@@ -3,6 +3,22 @@
 
 const DEG = Math.PI / 180;
 
+/** Matkap sapı: toplam boy en az 38 mm (mikro matkaplar Ø3 saplı) — 3D model ile çarpışma gövdesi aynı */
+export function drillShank(t, R, tipH, fluteLen) {
+  return { len: Math.max(18, 38 - tipH - fluteLen), r: Math.max(R * 0.98, (t.dia || 3) < 3 ? 1.5 : 0) };
+}
+
+/** Ön kovan bloğunun ön yüzü: takım ucundan eksenel uzaklık (mm) — bodies.js ile aynı */
+export const FRONT_BLOCK_X = 30;
+/** Önden eksenel delmede ulaşılabilen en derin Z (uç dahil): matkabın kesici boyu ve ön kovan bloğu */
+export function frontDrillReach(t) {
+  const cut = rotaryProfile(t).segs.find(s => s.cut);
+  return Math.min(cut ? cut.y1 : 0, FRONT_BLOCK_X) - 0.2;
+}
+
+/** Parmak freze modeli (3d çizimler/parmak_freze_3F_D6.obj, Ø6): ağız boyu Ø6'da 20.5 mm (çapla ölçeklenir), toplam boy 50 mm */
+export const ENDMILL_MODEL = { flute: 20.5, total: 50 };
+
 /** Dönen takım (matkap, punta, kılavuz, parmak freze) eksenel profil: [{y0, y1, r, cut}] (cut = kesici bölge) */
 export function rotaryProfile(t) {
   const R = Math.max(0.3, (t.dia || 3) / 2);
@@ -16,7 +32,8 @@ export function rotaryProfile(t) {
       segs.push({ y0: y, y1: y + 20, r: Math.max(R, 3), cut: false }); y += 20;
     } else {
       segs.push({ y0: 0, y1: tipH + fluteLen, r: R, cut: true }); y = tipH + fluteLen;
-      segs.push({ y0: y, y1: y + 18, r: R * 0.98, cut: false }); y += 18;
+      const sh = drillShank(t, R, tipH, fluteLen);
+      segs.push({ y0: y, y1: y + sh.len, r: sh.r, cut: false }); y += sh.len;
     }
   } else if (t.type === 'tap' || t.type === 'ltap') {
     const p = t.pitch || 1;
@@ -25,9 +42,9 @@ export function rotaryProfile(t) {
     segs.push({ y0: y, y1: y + 22, r: R * 0.75, cut: false }); y += 22;
     segs.push({ y0: y, y1: y + 6, r: R * 0.85, cut: false }); y += 6;     // kare uç (köşegen ≈ 0.85·R·√2·… sınır)
   } else {
-    const fl = fluteLen * 0.8;
+    const fl = ENDMILL_MODEL.flute * (t.dia || 6) / 6;
     segs.push({ y0: 0, y1: fl, r: R, cut: true }); y = fl;
-    segs.push({ y0: y, y1: y + 20, r: R, cut: false }); y += 20;
+    segs.push({ y0: y, y1: ENDMILL_MODEL.total, r: R, cut: false }); y = ENDMILL_MODEL.total;
   }
   const holder = holderType(t);
   if (holder === 'er') {
@@ -48,7 +65,7 @@ export function sleeveSpan(t) {
   const y1 = t.unit === 'front' ? 58 : 62;
   const fluteLen = Math.max(8, Math.min(45, (t.dia || 3) * 4 + 6));
   const tipH = R / Math.tan(((t.tipAngle || 118) / 2) * DEG);
-  const cutEnd = t.type === 'center' ? tipH + 6 : t.type === 'tap' || t.type === 'ltap' ? 13 : t.type === 'endmill' ? fluteLen * 0.8 : tipH + fluteLen;
+  const cutEnd = t.type === 'center' ? tipH + 6 : t.type === 'tap' || t.type === 'ltap' ? 13 : t.type === 'endmill' ? ENDMILL_MODEL.flute * (t.dia || 6) / 6 : tipH + fluteLen;
   return { y0: Math.min(y1 - 10, Math.max(14, cutEnd + 3)), y1, r: Math.max(7, R + 4) };
 }
 

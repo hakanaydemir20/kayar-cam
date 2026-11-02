@@ -1,5 +1,5 @@
 // Kurulum föyü (setup sheet), çubuk akışı hesabı ve ölçülü profil çizimi (SVG).
-import { TOOL_TYPES, UNITS } from '../tools/toolLibrary.js';
+import { TOOL_TYPES, UNITS, toolNo } from '../tools/toolLibrary.js';
 import { OP_TYPES } from '../ops/generators.js';
 import { FEATURE_LABELS, featureText } from './forms.js';
 
@@ -82,11 +82,11 @@ export function setupSheetHtml(project, result, opTimes, totalTime) {
     const ops = used.get(t.id) || [];
     const time = ops.reduce((s, o) => s + (opTimes[o.id] ? opTimes[o.id].t1 - opTimes[o.id].t0 : 0), 0);
     const size = t.type === 'turn' || t.type === 'thread' ? `R${f3(t.noseR)}` : t.width ? `G${f3(t.width)}` : `Ø${f3(t.dia)}${t.pitch ? '×' + f3(t.pitch) : ''}`;
-    return `<tr${ops.length ? '' : ' class="unused"'}><td>T${String(t.num).padStart(2, '0')}</td><td>${t.offset}</td><td>${esc(t.name)}</td><td>${esc(TOOL_TYPES[t.type]?.label)}</td><td>${esc(UNITS[t.unit]?.label)}</td><td>${f3(t.yPos)} / ${f3(t.xPos || 0)}</td><td>${size}</td><td>${f3(t.vc)}</td><td>${t.live ? f3(t.fz) + ' mm/diş' : f3(t.feed) + ' mm/dev'}</td><td>${ops.map(o => esc(o.name)).join('<br>') || '<i>kullanılmıyor</i>'}</td><td>${time ? time.toFixed(1) + ' s' : ''}</td></tr>`;
+    return `<tr${ops.length ? '' : ' class="unused"'}><td>${toolNo(t)}</td><td>${t.offset}</td><td>${esc(t.name)}</td><td>${esc(TOOL_TYPES[t.type]?.label)}</td><td>${esc(UNITS[t.unit]?.label)}</td><td>${f3(t.yPos)} / ${f3(t.xPos || 0)}</td><td>${size}</td><td>${f3(t.vc)}</td><td>${t.live ? f3(t.fz) + ' mm/diş' : f3(t.feed) + ' mm/dev'}</td><td>${ops.map(o => esc(o.name)).join('<br>') || '<i>kullanılmıyor</i>'}</td><td>${time ? time.toFixed(1) + ' s' : ''}</td></tr>`;
   }).join('');
   const opRows = P.ops.filter(o => o.enabled).map(o => {
     const ot = opTimes[o.id]; const t = P.tools.find(x => x.id === o.toolId);
-    return `<tr><td>$${OP_TYPES[o.type].channel}</td><td>${esc(o.name)}</td><td>${t ? 'T' + String(t.num).padStart(2, '0') : '—'}</td><td>${ot ? ot.t0.toFixed(1) : '—'}</td><td>${ot ? (ot.t1 - ot.t0).toFixed(1) : '—'}</td><td>${ot ? ot.line0 + 1 : ''}</td></tr>`;
+    return `<tr><td>$${OP_TYPES[o.type].channel}</td><td>${esc(o.name)}</td><td>${t ? toolNo(t) : '—'}</td><td>${ot ? ot.t0.toFixed(1) : '—'}</td><td>${ot ? (ot.t1 - ot.t0).toFixed(1) : '—'}</td><td>${ot ? ot.line0 + 1 : ''}</td></tr>`;
   }).join('');
   const warns = [];
   if (!post.verified) warns.push('Post-processor M kodları makineden DOĞRULANMADI — ilk çalıştırmada kuru çalıştırma / tek blok, düşük hızlı ilerleme.');

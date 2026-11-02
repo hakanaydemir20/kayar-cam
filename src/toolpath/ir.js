@@ -38,4 +38,6 @@ export class Prog {
   /** polar interpolasyon aç/kapa (X çap, C hipotetik mm) */
   polar(on) { return this.push({ k: 'polar', on }); }
   blank() { return this.push({ k: 'blank' }); }
+  /** blok atlama bölgesi (kapalı işlem): satırlar / ile yazılır, modal durumu etkilemez */
+  skip(on) { return this.push({ k: 'skip', on }); }
 }

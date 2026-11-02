@@ -1,7 +1,7 @@
 // Proje: makine + post + stok + parça + takımlar + işlemler. JSON kaydet/aç.
 import machineDef from './machine/sb20r-g.json';
 import postDef from './post/postProfile.json';
-import { defaultTools } from './tools/toolLibrary.js';
+import { defaultTools, STATIONS } from './tools/toolLibrary.js';
 import { examplePart, suggestBar } from './part/part.js';
 import { makeOp, buildProgram } from './ops/program.js';
 import { buildContext } from './ops/context.js';
@@ -15,6 +15,7 @@ export const clone = (o) => JSON.parse(JSON.stringify(o));
 export function newProject(part = examplePart()) {
   const p = {
     version: 1,
+    layout: 2,              // takım yerleşimi: makine çizimi (STATIONS)
     name: part.name,
     machine: clone(machineDef),
     post: clone(postDef),
@@ -42,7 +43,7 @@ export function autoOperations(p) {
     ops.push(makeOp('groove', gTool?.id ?? null, { z0: g.z0, z1: g.z1 }, `Kanal Z${g.z0}-${g.z1}`));
   }
   for (const h of f.filter(x => x.type === 'axialHole' && x.side === 'front')) {
-    ops.push(makeOp('center', tt(p, 21), { featureId: h.id }, 'Punta Ø' + h.dia));
+    ops.push(makeOp('center', p.tools.find(t => t.unit === 'front' && t.type === 'center')?.id ?? null, { featureId: h.id }, 'Punta Ø' + h.dia));
     const d = p.tools.find(t => t.unit === 'front' && t.type === 'drill' && Math.abs(t.dia - h.dia) < 1e-6);
     ops.push(makeOp('drill', d?.id ?? null, { featureId: h.id }, 'Delme Ø' + h.dia));
   }
@@ -54,12 +55,12 @@ export function autoOperations(p) {
   for (const fl of f.filter(x => x.type === 'flat')) {
     // düzlük boyuna sığan en büyük parmak freze (yoksa T12)
     const fit = p.tools.filter(t => t.unit === 'cross' && t.type === 'endmill' && t.dia <= Math.abs(fl.z1 - fl.z0) + 1e-6).sort((a, b) => b.dia - a.dia)[0];
-    ops.push(makeOp('flatMill', fit?.id ?? tt(p, 12), { featureId: fl.id }, 'Düzlük C' + fl.c));
+    ops.push(makeOp('flatMill', fit?.id ?? null, { featureId: fl.id }, 'Düzlük C' + fl.c));
   }
   for (const pk of f.filter(x => x.type === 'pocket')) {
     // cep çapından küçük en büyük parmak freze (helis için takım < cep)
     const fit = p.tools.filter(t => t.unit === 'cross' && t.type === 'endmill' && t.dia < pk.dia - 1e-6).sort((a, b) => b.dia - a.dia)[0];
-    ops.push(makeOp('pocketMill', fit?.id ?? tt(p, 13), { featureId: pk.id }, 'Cep Ø' + pk.dia));
+    ops.push(makeOp('pocketMill', fit?.id ?? null, { featureId: pk.id }, 'Cep Ø' + pk.dia));
   }
   const crossMill = (dia) => p.tools.find(t => t.unit === 'cross' && t.type === 'endmill' && (dia == null || Math.abs(t.dia - dia) < 1e-6));
   for (const pg of f.filter(x => x.type === 'polygon')) ops.push(makeOp('polygonMill', (crossMill(6) || crossMill())?.id ?? null, { featureId: pg.id }, `Çokgen ${pg.n}×AA${pg.af}`));
@@ -156,5 +157,60 @@ export function migrate(p) {
   p.post = deep(postDef, p.post);
   p.machine = deep(machineDef, p.machine);
   for (const t of p.tools) if (t.xPos == null) t.xPos = 0;
+  if ((p.layout || 1) < 2) migrateLayout(p);
+  fitStations(p);
   return p;
+}
+
+/** Eski takım yerleşimi (yerleşim 1) → makine çizimi yerleşimi (STATIONS). T numaraları korunur, yalnız montaj
+ *  konumları istasyonlara taşınır; tahmini X1/X2 strokları yeni yerleşimin gerektirdiği değerlere güncellenir. */
+export function migrateLayout(p) {
+  const by = (u) => p.tools.filter(t => t.unit === u).sort((a, b) => a.num - b.num || (a.offset ?? a.num) - (b.offset ?? b.num));
+  by('cross').forEach((t, i) => { t.yPos = STATIONS.cross[i] ?? STATIONS.cross.at(-1) - 30 * (i - STATIONS.cross.length + 1); t.xPos = 0; });
+  const F = STATIONS.front;
+  by('front').forEach((t, i) => { const k = i % F.xPos.length, c = Math.floor(i / F.xPos.length); t.yPos = F.yPos - 30 * c; t.xPos = F.xPos[k]; });
+  const back = [...by('back'), ...by('rear')];
+  back.forEach((t, i) => { t.yPos = STATIONS.back[i] ?? STATIONS.back.at(-1) + 30 * (i - STATIONS.back.length + 1); });
+  for (const k of ['X1', 'X2']) {
+    const a = p.machine.axes[k], d = machineDef.axes[k];
+    if (a?.estimated) { a.min = d.min; a.max = d.max; }
+  }
+  p.layout = 2;
+  return p;
+}
+
+/** Takımları makinenin gerçek istasyonlarına oturt (gang 6, çapraz 4, T35 3 kat, arka 4). İstasyon dışındaki takım
+ *  boş istasyona taşınır; yer kalmazsa programda kullanılmayan takım taretten çıkarılır. Kullanılan ama sığmayan
+ *  takım silinmez (p._overflow listesine yazılır). Döner: çıkarılan takım adları. */
+export function fitStations(p) {
+  const used = new Set(p.ops.map(o => o.toolId));
+  const removed = [], overflow = [];
+  const fit = (units, slots, keyOf, put) => {
+    const ts = p.tools.filter(t => units.includes(t.unit)).sort((a, b) => (used.has(b.id) - used.has(a.id)) || a.num - b.num || (a.offset ?? a.num) - (b.offset ?? b.num));
+    // önce kullanılan takımlar istasyon alır (kendi istasyonu geçerliyse korunur), sonra kullanılmayanlar
+    const taken = new Set();
+    const order = [...ts.filter(t => used.has(t.id)), ...ts.filter(t => !used.has(t.id))];
+    const rest = [];
+    for (const t of order) { const k = keyOf(t); if (k >= 0 && !taken.has(k)) taken.add(k); else rest.push(t); }
+    // kendi istasyonunu kaybeden kullanılmayan takımlar, sırada kullanılan takım varsa yer açmak için en sona
+    for (const t of rest) {
+      const k = slots.findIndex((_, i) => !taken.has(i));
+      if (k >= 0) { taken.add(k); put(t, k); continue; }
+      if (used.has(t.id)) {
+        // istasyonu tutan kullanılmayan takımı sök
+        const v = ts.find(x => !used.has(x.id) && p.tools.includes(x) && keyOf(x) >= 0 && !rest.includes(x));
+        if (v) { const kv = keyOf(v); removed.push(v.name); p.tools = p.tools.filter(x => x !== v); put(t, kv); continue; }
+        overflow.push(t.name);
+      } else { removed.push(t.name); p.tools = p.tools.filter(x => x !== t); }
+    }
+  };
+  const near = (list, y, tol) => list.findIndex(q => Math.abs(q - y) < tol);
+  fit(['gang'], STATIONS.gang, t => near(STATIONS.gang, t.yPos, 1), (t, k) => { t.yPos = STATIONS.gang[k]; });
+  fit(['cross'], STATIONS.cross, t => near(STATIONS.cross, t.yPos, 1), (t, k) => { t.yPos = STATIONS.cross[k]; t.xPos = 0; });
+  fit(['back', 'rear'], STATIONS.back, t => near(STATIONS.back, t.yPos, 1), (t, k) => { t.yPos = STATIONS.back[k]; });
+  const F = STATIONS.front;
+  fit(['front'], F.xPos, t => { const k = (t.offset ?? 0) - 1; return t.num === 35 && Math.abs(t.yPos - F.yPos) < 1 && k < F.xPos.length ? k : -1; },
+    (t, k) => { t.num = 35; t.offset = k + 1; t.yPos = F.yPos; t.xPos = F.xPos[k]; });
+  if (overflow.length) p._overflow = overflow; else delete p._overflow;
+  return removed;
 }

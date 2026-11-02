@@ -78,7 +78,7 @@ describe('arka tornalama (alın payı + geriye bakan omuz) ve G12.1 arka alın �
   cut.params.backStock = 0.3;
   p.ops.find(o => o.type === 'pickoff').params.grip = 4;   // kısa parça: pens somunu komşu takıma yaklaşmasın
   const iPick = p.ops.findIndex(o => o.type === 'backPolar');
-  p.ops.splice(iPick, 0, makeOp('backTurn', tool(p, 42).id));
+  p.ops.splice(iPick, 0, makeOp('backTurn', tool(p, 22).id));
   const { r, ss, c } = verify(p);
   const nc = r.posted.text;
   it('CAM/post/NC hatası yok', () => expect(r.errors).toEqual([]));
@@ -122,7 +122,7 @@ describe('çapa yazı (gravür, G7.1)', () => {
     features: [{ id: 'e1', type: 'engrave', text: 'AB-12', height: 4, depth: 0.15, z: 16, c: 10 }] });
   const p = newProject(part);
   // küçük gravür takımı (Ø1) — çapraz ünitedeki Ø4 frezenin yerine
-  const t13 = tool(p, 13); t13.dia = 1; t13.name = 'Gravür Ø1'; t13.vc = 30; t13.fz = 0.005;
+  const t13 = tool(p, 33); t13.dia = 1; t13.name = 'Gravür Ø1'; t13.vc = 30; t13.fz = 0.005;
   p.ops = autoOperations(p);
   const { r, ss, c } = verify(p);
   it('hatasız, çarpışmasız', () => { expect(r.errors).toEqual([]); expect(ss.collisions).toEqual([]); });

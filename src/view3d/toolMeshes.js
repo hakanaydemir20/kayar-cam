@@ -4,6 +4,9 @@ import * as THREE from 'three';
 import { sleeveSpan } from '../tools/toolGeom.js';
 import { insertOutline, insertShapeOf } from '../tools/toolLibrary.js';
 import { mat } from './materials.js';
+import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { ENDMILL_D6 } from './endmillModelData.js';
+import { ENDMILL_MODEL, drillShank } from '../tools/toolGeom.js';
 
 const DEG = Math.PI / 180;
 
@@ -174,6 +177,41 @@ function threadTool(t) {
   return g;
 }
 
+/** Gerçek parmak freze modeli (Ø6, 3 ağız): diğer çaplarda ağız bölgesi d/6 oranında ölçeklenir,
+ *  sap çapı da ölçeklenir, toplam boy sabit (ENDMILL_MODEL — çarpışma geometrisiyle aynı) */
+const _emBase = {}, _emGeo = new Map();
+function emDecode(k) {
+  if (_emBase[k]) return _emBase[k];
+  const d = ENDMILL_D6[k], bin = (b64) => Uint8Array.from(atob(b64), c => c.charCodeAt(0)).buffer;
+  const q = new Int16Array(bin(d.p)), P = new Float32Array(q.length);
+  for (let i = 0; i < q.length; i++) { const a = i % 3; P[i] = d.mn[a] + ((q[i] + 32768) / 65535) * (d.mx[a] - d.mn[a]); }
+  return (_emBase[k] = { P, I: d.i32 ? new Uint32Array(bin(d.i)) : new Uint16Array(bin(d.i)) });
+}
+function endmillGeometry(dia, k) {
+  const key = k + dia;
+  if (_emGeo.has(key)) return _emGeo.get(key);
+  const { P, I } = emDecode(k), s = dia / 6, M = ENDMILL_MODEL, fl = M.flute * s;
+  const out = new Float32Array(P.length);
+  for (let i = 0; i < P.length; i += 3) {
+    out[i] = P[i] * s; out[i + 2] = P[i + 2] * s;
+    const y = P[i + 1];
+    // ağız: düzgün ölçek · sap: ağız sonundan toplam boya uzatılır
+    out[i + 1] = k === 'cut' ? y * s : fl + ((y - M.flute) / (M.total - M.flute)) * (M.total - fl);
+  }
+  let g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(out, 3));
+  g.setIndex(new THREE.BufferAttribute(I, 1));
+  g = toCreasedNormals(g, 35 * DEG);   // keskin kenarlar keskin, helis yüzeyi yumuşak
+  _emGeo.set(key, g);
+  return g;
+}
+function endmillModel(t) {
+  const g = new THREE.Group(), d = t.dia || 6;
+  g.add(new THREE.Mesh(endmillGeometry(d, 'cut'), mat('tialn')));
+  g.add(new THREE.Mesh(endmillGeometry(d, 'shank'), mat('carbide')));
+  return { g, y: ENDMILL_MODEL.total };
+}
+
 /** Matkap (HSS/karbür), punta, kılavuz, parmak freze */
 function rotaryTool(t, holderType) {
   const g = new THREE.Group();
@@ -191,7 +229,8 @@ function rotaryTool(t, holderType) {
     } else {
       const fl = new THREE.Mesh(flutedGeometry(R, fluteLen, 2, R * 2 * Math.PI * 1.1, { depth: 0.42 }), mat(t.type === 'ldrill' ? 'tialn' : 'hss'));
       fl.position.y = y; g.add(fl); y += fluteLen;
-      g.add(cyl(R * 0.98, 18, t.type === 'ldrill' ? 'carbide' : 'hss', y)); y += 18;
+      const sh = drillShank(t, R, tipH, fluteLen);
+      g.add(cyl(sh.r, sh.len, t.type === 'ldrill' ? 'carbide' : 'hss', y)); y += sh.len;
     }
   } else if (t.type === 'tap' || t.type === 'ltap') {
     // dişli bölge
@@ -208,16 +247,18 @@ function rotaryTool(t, holderType) {
     g.add(cyl(R * 0.75, 22, 'steel', y)); y += 22;
     g.add(box(R * 1.2, 6, R * 1.2, 'steel', 0, y + 3, 0)); y += 6;
   } else if (t.type === 'endmill') {
-    const fl = new THREE.Mesh(flutedGeometry(R, fluteLen * 0.8, t.flutes || 3, R * 2 * Math.PI * 1.7, { depth: 0.3 }), mat('tialn'));
-    g.add(fl); y = fluteLen * 0.8;
-    g.add(cyl(R, 20, 'carbide', y)); y += 20;
+    const m = endmillModel(t);
+    g.add(m.g); y = m.y;
   }
   // tutucu
+  // (userData.holder: "yalnız takımlar" görünümünde gizlenir)
   if (holderType === 'er') {
-    g.add(erNut(y - 14, t.unit === 'cross' && (t.dia || 0) <= 5 ? 'ER11' : 'ER16'));
+    const nut = erNut(y - 14, t.unit === 'cross' && (t.dia || 0) <= 5 ? 'ER11' : 'ER16'); nut.userData.holder = true;
+    g.add(nut);
   } else if (holderType === 'sleeve') {
     const sl = sleeveSpan(t);                        // kovan blokta sabit (çarpışma geometrisiyle aynı)
-    g.add(cyl(sl.r, sl.y1 - sl.y0, 'blackOx', sl.y0));
+    const sv = cyl(sl.r, sl.y1 - sl.y0, 'blackOx', sl.y0); sv.userData.holder = true;
+    g.add(sv);
   }
   return g;
 }

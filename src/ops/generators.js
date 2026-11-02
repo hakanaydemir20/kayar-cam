@@ -2,7 +2,7 @@
 import { dilate, noseTipPath, toPolyline, sampleProfile, turnableEnvelope } from '../geom/sampled.js';
 import { fitSegments } from '../geom/fit.js';
 import { rpmFromVc, threadDepth, round3 } from '../tools/cuttingData.js';
-import { rotaryProfile } from '../tools/toolGeom.js';
+import { rotaryProfile, frontDrillReach } from '../tools/toolGeom.js';
 import { textStrokes, unsupportedChars } from '../geom/strokeFont.js';
 import { subNut, subBodies, backBodies } from '../sim/bodies.js';
 import { moved, subHitsBack } from '../sim/collision.js';
@@ -22,12 +22,13 @@ export const OP_TYPES = {
   tap:        { label: 'Kılavuz (Ön)', channel: 1, tools: ['tap'] },
   crossDrill: { label: 'Çapraz Delme', channel: 1, tools: ['ldrill', 'endmill'] },
   flatMill:   { label: 'Düzlük Frezeleme', channel: 1, tools: ['endmill'] },
+  areaMill:   { label: 'Bölgesel Frezeleme (C/Y)', channel: 1, tools: ['endmill'] },
   pocketMill: { label: 'Helikal Cep (G19)', channel: 1, tools: ['endmill'] },
   pickoff:    { label: 'Karşı İş Miline Al', channel: 2, tools: [] },
   cutoff:     { label: 'Kesme', channel: 1, tools: ['cutoff'] },
   backDrill:  { label: 'Arka Delme', channel: 2, tools: ['drill', 'center'] },
   backTap:    { label: 'Arka Kılavuz', channel: 2, tools: ['tap'] },
-  eject:      { label: 'Parça Atma', channel: 2, tools: [] },
+  eject:      { label: 'Parça Bırakma', channel: 2, tools: [] },
   rechuck:    { label: 'Çubuk İlerletme', channel: 1, tools: [] },
   midRechuck: { label: 'Ara Bağlama (uzun parça)', channel: 1, tools: [] },
   polygonMill:{ label: 'Çokgen Frezeleme (C/Y)', channel: 1, tools: ['endmill'] },
@@ -40,7 +41,7 @@ export const OP_TYPES = {
 
 export function defaultParams(type) {
   switch (type) {
-    case 'face': return { ap: 0.15, feed: null, vc: null };
+    case 'face': return { ap: 0.15, allow: 0, feed: null, vc: null };
     case 'rough': return { strategy: 'z', ap: 1.0, allowX: 0.15, allowZ: 0.05, retract: 0.3, feed: null, vc: null, contourPass: true };
     case 'finish': return { feed: null, vc: null, tol: 0.002 };
     case 'groove': return { z0: null, z1: null, allow: 0.05, peck: 0, feed: null, vc: null };
@@ -49,16 +50,17 @@ export function defaultParams(type) {
     case 'drill': return { featureId: null, peck: null, feed: null };
     case 'tap': return { featureId: null };
     case 'crossDrill': return { featureId: null, peck: null };
-    case 'flatMill': return { featureId: null, ap: 1.0, stepover: 0.6 };
+    case 'flatMill': return { featureId: null, ap: 1.0, stepover: 0.6, pattern: 'zigzagZ' };
+    case 'areaMill': return { c: 0, depth: 1, ap: 0.5, stepover: 0.5, pattern: 'zigzagY', contour: true, region: [{ z: 5, y: -3 }, { z: 15, y: -3 }, { z: 15, y: 3 }, { z: 5, y: 3 }] };
     case 'pocketMill': return { featureId: null, stepDown: 0.5, stepOver: 0.5 };
     case 'pickoff': return { grip: 6, feed: 500, gap: 1, dwell: 0.3 };
     case 'cutoff': return { feed: null, rpm: null, endX: -0.4, backStock: 0 };
     case 'backDrill': return { featureId: null, peck: null, feed: null };
     case 'backTap': return { featureId: null };
-    case 'eject': return {};
+    case 'eject': return { dropX: 0, dropZ: null, blow: 0.5, ejector: true };
     case 'rechuck': return {};
     case 'midRechuck': return { atZ: 100, shift: 100, grip: 6, feed: 500 };
-    case 'polygonMill': return { featureId: null, ap: 1.0, stepover: 0.6 };
+    case 'polygonMill': return { featureId: null, ap: 1.0, stepover: 0.6, pattern: 'zigzagZ' };
     case 'cylSlot': return { featureId: null, stepDown: 0.5 };
     case 'engrave': return { featureId: null };
     case 'backTurn': return { face: true, ap: 0.5, allowX: 0.1, allowZ: 0.05, feed: null, vc: null, roughFeed: null };
@@ -132,10 +134,13 @@ GEN.face = (prog, ctx, op, tool) => {
   const rn = tool.noseR;
   startTurning(prog, ctx, tool, op);
   const F = p.feed || tool.feed;
-  const n = Math.max(1, Math.ceil(fs / p.ap - 1e-9));
+  // finiş payı: alın Z = −pay'da biter, kalanı finiş konturu alır (finiş girişi Z−0.5'ten: pay ≤ 0.3)
+  const al = Math.min(0.3, Math.max(0, +p.allow || 0));
+  if (fs - al <= 1e-6) { prog.comment('ALIN: KALDIRILACAK MALZEME YOK'); endTool(prog, ctx); return; }
+  const n = Math.max(1, Math.ceil((fs - al) / p.ap - 1e-9));
   const xStart = ctx.stock.barDia + 1;
   for (let k = 1; k <= n; k++) {
-    const z = r3(-fs + (fs * k) / n);
+    const z = r3(-fs + ((fs - al) * k) / n);
     if (k === 1) goto(prog, ctx, xStart, z);   // önce güvenli X (önceki takım ön kovan olabilir), sonra Y/Z
     else prog.rapid({ Z: z });
     prog.line({ X: r3(-2 * rn - 0.1) }, F);
@@ -290,7 +295,11 @@ GEN.finish = (prog, ctx, op, tool, extra) => {
   const p = op.params;
   const env = ctx.envelopeFor(tool);
   const P = noseTipPath(env, tool.noseR);
-  const [z0, z1, inner] = zRange(ctx, extra);
+  let [z0, z1, inner] = zRange(ctx, extra);
+  // isteğe bağlı Z aralığı (bitmiş parçada seçilen yüzey)
+  if (p.zMin != null && p.zMin !== '' && Number.isFinite(+p.zMin)) { z0 = Math.max(z0, +p.zMin); inner = inner || +p.zMin > 0; }
+  if (p.zMax != null && p.zMax !== '' && Number.isFinite(+p.zMax)) z1 = Math.min(z1, +p.zMax);
+  if (z1 <= z0 + 1e-6) { prog.comment('FINIS: Z ARALIGI BOS'); return; }
   startTurning(prog, ctx, tool, op);
   if (extra?.seg) prog.comment(`SEGMENT ${extra.seg} Z${r3(Math.max(0, z0))}-${r3(z1)}`);
   const F = p.feed || tool.feed;
@@ -315,6 +324,8 @@ export function findGrooves(ctx, turnTool) {
     const a = i;
     while (i <= iEnd && R.r[i] < env.r[i] - 0.01) i++;
     let lo = a, hi = i - 1;
+    // parça arka ucuna açılan bölge (arka köşe pahı/radyüsü) kanal değildir: kesme tarafında kalır
+    if (R.zAt(hi) >= ctx.L - 0.002) continue;
     if (R.zAt(hi) - R.zAt(lo) > 0.05) {
       let minR = Infinity;
       for (let k = lo; k <= hi; k++) minR = Math.min(minR, R.r[k]);
@@ -457,8 +468,10 @@ function axialDrillCycle(prog, ctx, Zend, peck, F) {
 }
 
 function drillOnSpindle(prog, ctx, op, tool, which) {
-  const f = featureOf(ctx, op, 'axialHole');
+  const f0 = featureOf(ctx, op, 'axialHole');
   const p = op.params;
+  // bölünmüş delik (kaba otomatik): işlem kendi derinliğini taşır (önden erişilebilen kısım / arkadan kalan)
+  const f = p.depth != null ? { ...f0, depth: +p.depth, through: !!p.through } : f0;
   if (which === 'sub' && f.depth + tipLen(tool) + (f.through ? 0.5 : 0) > backAxialLimit(ctx, tool)) throw new Error(`${op.name}: delik derinliği + uç boyu arka işleme sınırını (${r3(backAxialLimit(ctx, tool))} mm) aşıyor — karşı iş mili arka ünitedeki takımlara çarpar. Tutma boyunu azaltın veya komşu istasyonu boşaltın.`);
   if (tool.type !== 'center' && tool.dia > f.dia + 1e-6) throw new Error(`${op.name}: matkap Ø${tool.dia} > delik Ø${f.dia}`);
   const limDrill = which === 'main' ? ctx.machine.stations.frontSleeve.maxDrill : ctx.machine.liveTools.back.maxDrillStatic;
@@ -475,6 +488,7 @@ function drillOnSpindle(prog, ctx, op, tool, which) {
     Zend = (spot / 2) / Math.tan(((tool.tipAngle || 90) / 2) * Math.PI / 180);
   } else {
     Zend = f.depth + (f.through ? tipLen(tool) + 0.5 : tipLen(tool));
+    if (which === 'main' && Zend > frontDrillReach(tool) + 1e-6) throw new Error(`${op.name}: delik derinliği (${r3(f.depth)} mm + uç ${r3(Zend - f.depth)}) Ø${tool.dia} matkabın önden erişimini aşıyor (en çok Z${r3(frontDrillReach(tool))}: ağız boyu / ön kovan bloğu). Kaba otomatik deliği önden ve arkadan bölerek planlar; ya da daha uzun ağızlı matkap seçin.`);
   }
   const peck = tool.type === 'center' ? 0 : (p.peck || tool.dia * 1.5);
   axialDrillCycle(prog, ctx, r3(Zend), r3(peck), p.feed || tool.feed);
@@ -783,64 +797,248 @@ GEN.backTap = (prog, ctx, op, tool) => {
   tapOnSpindle(prog, ctx, op, tool, 'sub');
   prog.rapid({ Z: r3(-5) });
 };
-GEN.eject = (prog, ctx) => {
+/** Parça bırakma makrosu (kayar otomat çevrim sonu): karşı iş mili durur, arka takımlardan uzaklaşır, makinedeki
+ *  bırakma alanına (X2 yanal, isteğe bağlı Z2) gider; hava üfleme açık, pens açılır, itici parçayı iter, hava kapanır.
+ *  Parça pensteyken bekleme konumuna (ön takımların önüne) DÖNÜLMEZ: örtüşen çevrimde ana kanal o sırada ön delme
+ *  takımlarıyla çalışıyor olabilir (çarpışma kontrolü yakaladı). Varsayılan bırakma yeri arka ünite tarafında, uzakta. */
+GEN.eject = (prog, ctx, op) => {
+  const p = op?.params || {}, C = ctx.project.post.codes, ax = ctx.machine.axes;
   prog.spindle({ which: 'sub', dir: 'stop' });
   prog.workOffset('G55');
   prog.rapid({ Z: -5 });          // arka takımlardan uzaklaş
   prog.workOffset('G54');
-  prog.rapid({ X: 0 });           // önce yanal, sonra eksenel (çapraz hareket yok)
-  // parça pensteyken bekleme konumuna (ön takımların önüne) DÖNÜLMEZ: örtüşen çevrimde ana kanal o sırada ön
-  // kovan takımlarıyla çalışıyor olabilir (çarpışma kontrolü yakaladı). Parça arka ünite tarafında, uzakta atılır.
+  prog.comment('PARCA BIRAKMA');
+  const x = +p.dropX || 0;
+  if (x < ax.X2.min || x > ax.X2.max) throw new Error(`${op.name}: bırakma konumu X2 ${x} strok dışında (${ax.X2.min}…${ax.X2.max})`);
+  prog.rapid({ X: r3(x) });       // önce yanal, sonra eksenel (çapraz hareket yok)
+  if (p.dropZ != null && p.dropZ !== '') {
+    const z = +p.dropZ;
+    if (z < ax.Z2.min || z > ax.Z2.max) throw new Error(`${op.name}: bırakma konumu Z2 ${z} strok dışında (${ax.Z2.min}…${ax.Z2.max})`);
+    prog.rapid({ Z: r3(z) });
+  }
+  const blow = Math.max(0, +p.blow || 0);
+  if (blow && C.airBlowOn) prog.m('airBlowOn');
   prog.m('subChuckOpen');
-  prog.m('partEject');
-  prog.dwell(0.5);
+  if (p.ejector !== false) prog.m('partEject');
+  prog.dwell(Math.max(0.2, blow || 0.5));
+  if (blow && C.airBlowOff) prog.m('airBlowOff');
 };
 
 // ================================================================ C/Y frezeleme (ana iş mili, çapraz tahrikli)
 /** Tek düzlük: C açısında, Rloc dış çaptan h yüksekliğine kadar Y zikzak (startLive sonrası çağrılır) */
+/** Düzlük/çokgen bölgesinin yerel yarıçapı: bölgenin içinden örneklenir (uçtaki flanş/omuz yarıçapı sayılmaz; hedef ve tanıma ile aynı) */
+function flatLocalR(ctx, z0, z1) {
+  let R = 0;
+  const e = Math.min(0.1, (z1 - z0) / 4);
+  for (let z = z0 + e; z <= z1 - e + 1e-9; z += 0.05) R = Math.max(R, ctx.rAt(z));
+  return R;
+}
+/** Frezeleme desenleri (düzlük, çokgen, bölgesel frezeleme): düz pasolar veya dıştan içe spiral */
+export const MILL_PATTERNS = {
+  zigzagZ: 'Zikzak · Z yönünde',
+  zigzagY: 'Zikzak · Y yönünde',
+  onewayZ: 'Tek yön · Z yönünde',
+  onewayY: 'Tek yön · Y yönünde',
+  spiral: 'Spiral · dıştan içe',
+};
+/** lines: [{at, a, b}] — along ekseninde a→b, diğer eksen = at. Zikzakta komşu pasolar örtüşüyorsa kesmeden bağlanır;
+ *  tek yönde her paso aynı yönde, aralarda kalkış (hep aynı freze yönü: aynı/ters yönlü kesme) */
+function millLines(prog, lines, along, feed, x, xUp, oneway) {
+  const other = along === 'Y' ? 'Z' : 'Y';
+  lines.forEach((L, k) => {
+    const rev = !oneway && k % 2 === 1;
+    const [s, e] = rev ? [L.b, L.a] : [L.a, L.b];
+    const prev = lines[k - 1];
+    const linked = !oneway && prev && Math.min(prev.b, L.b) - Math.max(prev.a, L.a) > 0.05;
+    if (!linked) { prog.rapid({ X: xUp }); prog.rapid({ [along]: r3(s), [other]: r3(L.at) }); prog.line({ X: x }, feed); }
+    else {
+      // önceki pasonun sonundan iki pasonun örtüşen ucuna, diğer eksende yeni pasoya, sonra pasonun başına
+      const v = rev ? Math.min(prev.b, L.b) : Math.max(prev.a, L.a);
+      prog.line({ [along]: r3(v) }, feed); prog.line({ [other]: r3(L.at) }, feed); prog.line({ [along]: r3(s) }, feed);
+    }
+    prog.line({ [along]: r3(e) }, feed);
+  });
+  prog.rapid({ X: xUp });
+}
+/** Spiral: kapalı konturlar dıştan içe; konturlar arası kesmeden geçiş */
+function millLoops(prog, loops, feed, x, xUp) {
+  loops.forEach((lp, k) => {
+    if (k === 0) { prog.rapid({ X: xUp }); prog.rapid({ Y: r3(lp[0].y), Z: r3(lp[0].z) }); prog.line({ X: x }, feed); }
+    else prog.line({ Y: r3(lp[0].y), Z: r3(lp[0].z) }, feed);
+    for (const q of [...lp.slice(1), lp[0]]) prog.line({ Y: r3(q.y), Z: r3(q.z) }, feed);
+  });
+  prog.rapid({ X: xUp });
+}
+/** Dikdörtgen bölge deseni: takım merkezi z∈[za,zb], y∈[y0,y1] */
+function rectPattern(pat, za, zb, y0, y1, step) {
+  const span = (a, b) => { const n = Math.max(1, Math.ceil((b - a) / step - 1e-9)); return Array.from({ length: n + 1 }, (_, k) => a + ((b - a) * k) / n); };
+  if (pat === 'spiral') {
+    const loops = [];
+    for (let d = 0; loops.length < 400; d += step) {
+      const a = za + d, b = zb - d, c = y0 + d, e = y1 - d;
+      if (b - a < 1e-3 || e - c < 1e-3) {
+        // son: orta çizgi (dar kenar boyunca kalan şerit)
+        const zm = (za + zb) / 2, ym = (y0 + y1) / 2;
+        loops.push(zb - za >= y1 - y0 ? [{ z: Math.min(a, zm), y: ym }, { z: Math.max(b, zm), y: ym }] : [{ z: zm, y: Math.min(c, ym) }, { z: zm, y: Math.max(e, ym) }]);
+        break;
+      }
+      loops.push([{ z: a, y: c }, { z: b, y: c }, { z: b, y: e }, { z: a, y: e }]);
+    }
+    return { loops };
+  }
+  if (pat === 'zigzagY' || pat === 'onewayY') return { along: 'Y', lines: (zb - za < 1e-6 ? [za] : span(za, zb)).map(z => ({ at: z, a: y0, b: y1 })), oneway: pat === 'onewayY' };
+  return { along: 'Z', lines: span(y0, y1).map(y => ({ at: y, a: za, b: zb })), oneway: pat === 'onewayZ' };
+}
+
 function flatPasses(prog, ctx, tool, c, depth, z0, z1, p, feed) {
   const rt = tool.dia / 2;
-  let Rloc = 0;
-  for (let z = z0; z <= z1 + 1e-9; z += 0.05) Rloc = Math.max(Rloc, ctx.rAt(z));
+  const Rloc = flatLocalR(ctx, z0, z1);
   const h = Rloc - depth;
   if (h < 0) throw new Error('düzlük derinliği yarıçaptan büyük');
   if (z1 - z0 < tool.dia - 1e-6) throw new Error(`düzlük boyu (${r3(z1 - z0)}) takım çapından (${tool.dia}) küçük`);
   const b = Math.sqrt(Math.max(0, Rloc * Rloc - h * h));
   const za = r3(z0 + rt), zb = r3(Math.max(z0 + rt, z1 - rt));
   const yMax = b + 0.3;
-  const n = Math.max(1, Math.ceil((2 * yMax) / (p.stepover * tool.dia)));
-  const ys = [];
-  for (let k = 0; k <= n; k++) ys.push(r3(-yMax + (2 * yMax * k) / n));
   const levels = [];
   for (let lv = Rloc - p.ap; lv > h + 1e-6; lv -= p.ap) levels.push(lv);
   levels.push(h);
   prog.rapid({ X: ctx.safeX });
   prog.rapid({ C: r3(c) });
-  const yN = ys[ys.length - 1];
+  // seçilen desen her katta düzlüğün dikdörtgen bölgesinde (takım merkezi z∈[za,zb], y∈[−yMax,yMax])
+  const pat = p.pattern || 'zigzagZ';
+  const step = Math.max(0.05, p.stepover * tool.dia), xUp = r3(2 * (Rloc + 1));
+  const D = rectPattern(pat, za, zb, -yMax, yMax, step);
+  goto(prog, ctx, xUp, D.loops ? D.loops[0][0].z : D.along === 'Z' ? za : D.lines[0].at, D.loops ? D.loops[0][0].y : -yMax);
   for (const lv of levels) {
     const x = r3(2 * lv);
-    goto(prog, ctx, r3(2 * (Rloc + 1)), za, ys[0]);
-    prog.line({ X: x }, feed);
-    // çevre: iki uçta (za, zb) tam Y süpürmesi → düzlük uçlarında tarak izi kalmaz
-    prog.line({ Y: yN }, feed);
-    prog.line({ Z: zb }, feed);
-    prog.line({ Y: ys[0] }, feed);
-    // iç: Z yönünde zikzak
-    ys.forEach((y, k) => {
-      if (k > 0) prog.line({ Y: y }, feed);
-      prog.line({ Z: k % 2 === 0 ? za : zb }, feed);
-    });
-    prog.rapid({ X: r3(2 * (Rloc + 1)) });
+    // Z boyu ≈ 0 ise (düzlük boyu = takım çapı) Z pasoları boş: yalnız uç süpürmesi
+    if (D.loops) millLoops(prog, D.loops, feed, x, xUp); else if (D.along !== 'Z' || zb - za > 0.05) millLines(prog, D.lines, D.along, feed, x, xUp, D.oneway);
+    // Z yönlü desenlerden sonra uç temizliği: düzlük uçlarında (za, zb) tam Y süpürmesi → pasolar arası tarak izi kalmaz
+    if (D.along === 'Z') millLines(prog, za < zb - 1e-6 ? [{ at: zb, a: -yMax, b: yMax }, { at: za, a: -yMax, b: yMax }] : [{ at: za, a: -yMax, b: yMax }], 'Y', feed, x, xUp, D.oneway);
   }
   prog.rapid({ Y: 0 });
 }
+
+/** Çokgenin z düşey doğrusuyla kesişimi: y aralıkları (çift-tek) */
+function sliceY(poly, z) {
+  const ys = [];
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    if ((a.z <= z && b.z > z) || (b.z <= z && a.z > z)) ys.push(a.y + (b.y - a.y) * (z - a.z) / (b.z - a.z));
+  }
+  ys.sort((p, q) => p - q);
+  const out = [];
+  for (let k = 0; k + 1 < ys.length; k += 2) out.push([ys[k], ys[k + 1]]);
+  return out;
+}
+/** Takım merkezinin z'de girebileceği y aralığı: diskin bütün kirişleri bölge içinde kalır (tutucu sınır) */
+function centerRange(poly, z, rt) {
+  let lo = -Infinity, hi = Infinity;
+  const n = 8;
+  for (let k = -n; k <= n; k++) {
+    const dz = (rt * k) / n, w = Math.sqrt(Math.max(0, rt * rt - dz * dz));
+    const iv = sliceY(poly, z + dz);
+    if (!iv.length) return null;
+    // merkezin bulunduğu aralık: en geniş olanı seç (basit bölge varsayımı)
+    const [a, b] = iv.reduce((m, q) => (q[1] - q[0] > m[1] - m[0] ? q : m), iv[0]);
+    lo = Math.max(lo, a + w); hi = Math.min(hi, b - w);
+  }
+  return hi - lo > 1e-3 ? [lo, hi] : null;
+}
+/** İçbükey olmayan çokgeni d kadar içe ofsetle (kenar pasosu); içbükeyse null */
+function insetConvex(poly, d) {
+  const n = poly.length;
+  let area = 0; for (let i = 0; i < n; i++) { const a = poly[i], b = poly[(i + 1) % n]; area += a.z * b.y - b.z * a.y; }
+  const s = Math.sign(area) || 1;
+  for (let i = 0; i < n; i++) { const a = poly[i], b = poly[(i + 1) % n], c = poly[(i + 2) % n]; if (Math.sign((b.z - a.z) * (c.y - b.y) - (b.y - a.y) * (c.z - b.z)) === -s) return null; }
+  const lines = poly.map((a, i) => { const b = poly[(i + 1) % n], L = Math.hypot(b.z - a.z, b.y - a.y) || 1; const nz = -s * (b.y - a.y) / L, ny = s * (b.z - a.z) / L; return { a: { z: a.z + nz * d, y: a.y + ny * d }, u: { z: (b.z - a.z) / L, y: (b.y - a.y) / L } }; });
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const p = lines[(i + n - 1) % n], q = lines[i];
+    const den = p.u.z * q.u.y - p.u.y * q.u.z;
+    if (Math.abs(den) < 1e-9) { out.push(q.a); continue; }
+    const t = ((q.a.z - p.a.z) * q.u.y - (q.a.y - p.a.y) * q.u.z) / den;
+    out.push({ z: p.a.z + p.u.z * t, y: p.a.y + p.u.y * t });
+  }
+  // ofset çökmesin
+  let a2 = 0; for (let i = 0; i < n; i++) { const a = out[i], b = out[(i + 1) % n]; a2 += a.z * b.y - b.z * a.y; }
+  return Math.sign(a2) === s && Math.abs(a2) > 1e-6 ? out : null;
+}
+/** Bölgesel frezeleme: C konumla, Y–Z düzleminde serbest çokgen bölgeyi parmak frezeyle katlar halinde tara */
+GEN.areaMill = (prog, ctx, op, tool) => {
+  const p = op.params, rt = tool.dia / 2;
+  const poly = (p.region || []).map(q => ({ z: +q.z, y: +q.y })).filter(q => Number.isFinite(q.z) && Number.isFinite(q.y));
+  if (poly.length < 3) throw new Error(`${op.name}: bölge en az 3 köşeli olmalı`);
+  const zs = poly.map(q => q.z), zmin = Math.min(...zs), zmax = Math.max(...zs);
+  if (zmin < -0.01 || zmax > ctx.L + 0.01) throw new Error(`${op.name}: bölge parça boyu (0–${r3(ctx.L)}) dışında`);
+  let Rloc = 0;
+  for (let z = zmin; z <= zmax + 1e-9; z += 0.05) Rloc = Math.max(Rloc, ctx.rAt(z));
+  const h = Rloc - (+p.depth || 0);
+  if (!(p.depth > 0)) throw new Error(`${op.name}: derinlik 0’dan büyük olmalı`);
+  if (h < 0) throw new Error(`${op.name}: derinlik (${p.depth}) yerel yarıçaptan (${r3(Rloc)}) büyük`);
+  const step = Math.max(0.05, (+p.stepover || 0.5) * tool.dia);
+  // tarama doğruları (sabit Z, Y boyunca)
+  const lines = [];
+  for (let z = zmin + rt; z <= zmax - rt + 1e-6; z += step) { const r = centerRange(poly, z, rt); if (r) lines.push({ z: r3(z), y0: r3(r[0]), y1: r3(r[1]) }); }
+  if (!lines.length) { const zc = (zmin + zmax) / 2, r = centerRange(poly, zc, rt); if (r) lines.push({ z: r3(zc), y0: r3(r[0]), y1: r3(r[1]) }); }
+  if (!lines.length) throw new Error(`${op.name}: bölge takım çapından (Ø${tool.dia}) dar — daha küçük freze seçin`);
+  // seçilen desen: Z yönünde doğrular (eksenleri değiştirilmiş çokgende aynı hesap) veya spiral (dışbükey bölge)
+  const pat = p.pattern || 'zigzagY';
+  let alt = null;
+  if (pat === 'zigzagZ' || pat === 'onewayZ') {
+    const sw = poly.map(q => ({ z: q.y, y: q.z })), ys = sw.map(q => q.z), ya = Math.min(...ys), yb = Math.max(...ys);
+    const L2 = [];
+    for (let y = ya + rt; y <= yb - rt + 1e-6; y += step) { const r = centerRange(sw, y, rt); if (r) L2.push({ at: y, a: r[0], b: r[1] }); }
+    if (L2.length) alt = { along: 'Z', lines: L2, oneway: pat === 'onewayZ' };
+  } else if (pat === 'onewayY') alt = { along: 'Y', lines: lines.map(L => ({ at: L.z, a: L.y0, b: L.y1 })), oneway: true };
+  else if (pat === 'spiral') {
+    const loops = [];
+    for (let d = rt; loops.length < 400; d += step) { const q = insetConvex(poly, d); if (!q) break; loops.push(q); }
+    if (loops.length) alt = { loops };
+    else prog.comment('SPIRAL ICIN DISBUKEY BOLGE GEREKIR - ZIKZAK');
+  }
+  const levels = [];
+  const ap = Math.max(0.05, +p.ap || 0.5);
+  for (let lv = Rloc - ap; lv > h + 1e-6; lv -= ap) levels.push(lv);
+  levels.push(h);
+  const { feed } = liveData(ctx, tool);
+  const xUp = r3(2 * (Rloc + 1));
+  startLive(prog, ctx, tool, +p.c || 0);
+  prog.comment(`BOLGE C${r3(+p.c || 0)} Z${r3(zmin)}-${r3(zmax)} DERINLIK ${r3(p.depth)}`);
+  for (const lv of levels) {
+    const x = r3(2 * lv);
+    if (alt) { if (alt.loops) millLoops(prog, alt.loops, feed, x, xUp); else millLines(prog, alt.lines, alt.along, feed, x, xUp, alt.oneway); continue; }
+    lines.forEach((L, k) => {
+      const [ya, yb] = k % 2 === 0 ? [L.y0, L.y1] : [L.y1, L.y0];
+      const prev = lines[k - 1];
+      // komşu doğruya geçiş: aralıklar örtüşüyorsa kesmeden geç, değilse kalk
+      const linked = prev && Math.abs(prev.z - L.z) <= step + 1e-6 && Math.min(prev.y1, L.y1) - Math.max(prev.y0, L.y0) > 0.05 && k > 0;
+      if (!linked) { prog.rapid({ X: xUp }); prog.rapid({ Y: ya, Z: L.z }); prog.line({ X: x }, feed); }
+      else { prog.line({ Y: Math.max(L.y0, Math.min(L.y1, k % 2 === 0 ? L.y0 : L.y1)) }, feed); prog.line({ Z: L.z }, feed); }
+      prog.line({ Y: yb }, feed);
+    });
+    prog.rapid({ X: xUp });
+  }
+  // kenar pasosu: bölgenin takım yarıçapı kadar içinden (dışbükey bölgeler)
+  if (p.contour) {
+    const ins = insetConvex(poly, rt);
+    if (ins) {
+      const x = r3(2 * h);
+      prog.rapid({ Y: r3(ins[0].y), Z: r3(ins[0].z) });
+      prog.line({ X: x }, feed);
+      for (const q of [...ins.slice(1), ins[0]]) prog.line({ Y: r3(q.y), Z: r3(q.z) }, feed);
+      prog.rapid({ X: xUp });
+    } else prog.comment('KENAR PASOSU YOK (ICBUKEY BOLGE)');
+  }
+  prog.rapid({ Y: 0 });
+  endLive(prog, ctx);
+};
 
 /** Çokgen (altıgen, kare…): her kenar bir düzlük, C ile indekslenir */
 GEN.polygonMill = (prog, ctx, op, tool) => {
   const f = featureOf(ctx, op, 'polygon');
   if (!(f.n >= 3)) throw new Error(`${op.name}: kenar sayısı en az 3 olmalı`);
-  let Rloc = 0;
-  for (let z = f.z0; z <= f.z1 + 1e-9; z += 0.05) Rloc = Math.max(Rloc, ctx.rAt(z));
+  const Rloc = flatLocalR(ctx, f.z0, f.z1);
   const depth = Rloc - f.af / 2;
   if (depth <= 0.001) throw new Error(`${op.name}: anahtar ağzı (${f.af}) çaptan (Ø${r3(2 * Rloc)}) küçük olmalı`);
   const { feed } = liveData(ctx, tool);

@@ -77,6 +77,13 @@ export class Viewer {
     const d0 = c.position.clone().sub(t), d1 = p1.clone().sub(t1);
     this.anim = { t0: performance.now(), dur: 550, tA: t.clone(), tB: t1, rA: d0.length(), rB: d1.length(), qA: d0.normalize(), qB: d1.normalize() };
   }
+  /** Serbest kamera konumu (animasyonlu) */
+  pose(p1, t1, instant = false) {
+    const c = this.camera, t = this.controls.target;
+    if (instant) { c.position.copy(p1); t.copy(t1); this.anim = null; return; }
+    const d0 = c.position.clone().sub(t), d1 = p1.clone().sub(t1);
+    this.anim = { t0: performance.now(), dur: 550, tA: t.clone(), tB: t1.clone(), rA: d0.length(), rB: d1.length(), qA: d0.normalize(), qB: d1.normalize() };
+  }
   stepAnim() {
     const a = this.anim; if (!a) return;
     let k = Math.min(1, (performance.now() - a.t0) / a.dur);

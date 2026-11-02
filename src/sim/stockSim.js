@@ -230,6 +230,9 @@ function shapeFor(tool) {
 /**
  * Simülasyon motoru. step(t) ile zamanda ileri gider.
  */
+/** Çevre yönünde dilim sayısı: çubuk çevresinde ≈ 0.15 mm adım (çapraz delik ve düzlük kenarları düzgün görünür), 120…360, 8'in katı */
+export function stockNth(barDia) { return Math.min(360, Math.max(120, Math.ceil(Math.PI * (barDia || 20) / 0.15 / 8) * 8)); }
+
 export class StockSim {
   constructor(project, sim, opts = {}) {
     this.project = project;
@@ -240,7 +243,7 @@ export class StockSim {
     this.cutW = cut ? cut.width : 2;
     const cutOp = project.ops.find(o => o.type === 'cutoff' && o.enabled);
     this.bs = cutOp ? Math.max(0, +cutOp.params.backStock || 0) : 0;   // arka alın payı (kesme L+bs'de)
-    this.opts = { dMin: -(project.stock.faceStock + 1), dMax: L + this.cutW + 12, dz: 0.05, nth: 120, R: project.stock.barDia / 2 };
+    this.opts = { dMin: -(project.stock.faceStock + 1), dMax: L + this.cutW + 12, dz: 0.05, nth: stockNth(project.stock.barDia), R: project.stock.barDia / 2 };
     this.moves = [];
     for (const p of sim.paths) for (const m of p.moves) if (!opts.only || m.path === opts.only) this.moves.push(m);
     this.moves.sort((a, b) => a.t0 - b.t0 || a.path - b.path);
@@ -544,6 +547,8 @@ export function buildTarget(project, opts) {
     const o = i * T.nth;
     for (let j = 0; j < T.nth; j++) T.r[o + j] = r;
   }
+  // serbest çizim parçası: iç profil (delik, düz dip, iç kanal) doğrudan hedefe
+  if (project.part.inner) for (let i = 0; i < T.nz; i++) { const d = T.dAt(i); if (d >= 0 && d <= L) T.rin[i] = Math.max(T.rin[i], profileR(project.part.inner, d)); }
   T.lowAllowed = new Float32Array(T.nz).fill(NaN);   // diş bölgesi: izin verilen alt sınır
   T.innerFree = new Uint8Array(T.nz);                  // delik giriş pahı / matkap ucu konisi
   for (const f of project.part.features) {
@@ -572,7 +577,8 @@ export function buildTarget(project, opts) {
     } else if (f.type === 'flat') {
       const phi = -f.c * DEG;
       let Rl = 0;
-      for (let z = f.z0; z <= f.z1; z += 0.05) Rl = Math.max(Rl, profileR(prof, z));
+      const e = Math.min(0.1, (f.z1 - f.z0) / 4);
+      for (let z = f.z0 + e; z <= f.z1 - e + 1e-9; z += 0.05) Rl = Math.max(Rl, profileR(prof, z));
       const h = Rl - f.depth;
       for (let i = T.idx(f.z0); i <= T.idx(f.z1); i++) {
         const o = i * T.nth;
@@ -645,6 +651,27 @@ export function buildTarget(project, opts) {
     }
   }
   threadCrossLow(T, project, prof);
+  // bölgesel frezeleme işlemleri hedef geometrinin parçasıdır (Mastercam'de çizilen bölge gibi): C yönünde düzlem, çokgen içinde
+  for (const op of project.ops || []) {
+    if (op.type !== 'areaMill' || !op.enabled) continue;
+    const poly = (op.params.region || []).map(q => ({ z: +q.z, y: +q.y }));
+    if (poly.length < 3 || !(op.params.depth > 0)) continue;
+    const zs = poly.map(q => q.z), z0 = Math.min(...zs), z1 = Math.max(...zs);
+    let Rl = 0;
+    for (let z = z0; z <= z1 + 1e-9; z += 0.05) Rl = Math.max(Rl, profileR(prof, z));
+    const h = Rl - op.params.depth, phi = -(+op.params.c || 0) * DEG;
+    const inside = (z, y) => { let c = false; for (let a = 0, b = poly.length - 1; a < poly.length; b = a++) { const A = poly[a], B = poly[b]; if ((A.z > z) !== (B.z > z) && y < (B.y - A.y) * (z - A.z) / (B.z - A.z) + A.y) c = !c; } return c; };
+    for (let i = Math.max(0, T.idx(z0)); i <= Math.min(T.nz - 1, T.idx(z1)); i++) {
+      const d = T.dAt(i), o = i * T.nth;
+      for (let j = 0; j < T.nth; j++) {
+        let D = j * 2 * Math.PI / T.nth - phi; D = Math.atan2(Math.sin(D), Math.cos(D));
+        const cs = Math.cos(D);
+        if (cs <= 0.02 || T.r[o + j] * cs <= h) continue;
+        // düzlem üstündeki nokta bölgede mi (yanal konum = h·tanD)
+        if (inside(d, h * Math.tan(D))) T.r[o + j] = h / cs;
+      }
+    }
+  }
   return T;
 }
 

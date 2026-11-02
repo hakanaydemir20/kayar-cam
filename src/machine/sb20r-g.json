@@ -10,7 +10,7 @@
   "axes": {
     "X1": {
       "min": -10,
-      "max": 140,
+      "max": 200,
       "estimated": true,
       "desc": "Gang tool post radyal (çap değeri)"
     },
@@ -32,8 +32,8 @@
       "desc": "Ana iş mili C ekseni"
     },
     "X2": {
-      "min": -180,
-      "max": 20,
+      "min": -20,
+      "max": 185,
       "estimated": true,
       "desc": "Karşı iş mili yanal (mm, makine)"
     },
