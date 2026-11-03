@@ -47,10 +47,15 @@ export function sampleProfile(points, z0, z1, dz, outside = 0) {
 
 /** Talaşsız (undercut'sız) zarf: +Z yönünde ilerleyen kater için geriye bakan
  *  yüzeylerin eğimini takımın arka boşluk açısıyla sınırlar. */
-export function turnableEnvelope(s, backAngleDeg) {
+export function turnableEnvelope(s, backAngleDeg, frontDeg = 0) {
   const e = s.clone();
-  const drop = Math.tan(backAngleDeg * Math.PI / 180) * s.dz;
+  const drop = Math.tan(Math.max(0.5, backAngleDeg) * Math.PI / 180) * s.dz;
   for (let i = 1; i < e.n; i++) e.r[i] = Math.max(e.r[i], e.r[i - 1] - drop);
+  // ana kenar öne eğikse (κr < 90°): yükselen omuzun önünde kenar eğimi kadar malzeme kalır (z+ yönünden geriye tarama)
+  if (frontDeg > 0.01) {
+    const rise = s.dz / Math.tan(frontDeg * Math.PI / 180);
+    for (let i = e.n - 2; i >= 0; i--) e.r[i] = Math.max(e.r[i], e.r[i + 1] - rise);
+  }
   return e;
 }
 

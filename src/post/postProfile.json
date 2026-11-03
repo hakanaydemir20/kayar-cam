@@ -17,7 +17,7 @@
     "liveCW": "M53", "liveCCW": "M54", "liveStop": "M55",
     "backLiveCW": "M63", "backLiveCCW": "M64", "backLiveStop": "M65",
     "coolantOn": "M8", "coolantOff": "M9",
-    "backCoolantOn": "M28", "backCoolantOff": "M29",
+    "backCoolantOn": "M8", "backCoolantOff": "M9",
     "mainCAxisOn": "M18", "mainCAxisOff": "M17",
     "subCAxisOn": "M38", "subCAxisOff": "M37",
     "mainChuckClose": "M10", "mainChuckOpen": "M11",

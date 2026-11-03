@@ -1,5 +1,6 @@
 // İşlem üreteçleri için ortak bağlam ve geometri hazırlığı.
 import { sampleProfile, turnableEnvelope } from '../geom/sampled.js';
+import { insertEdges } from '../tools/toolLibrary.js';
 
 export const DZ = 0.001; // profil örnekleme adımı (mm)
 
@@ -20,8 +21,11 @@ export function buildContext(project) {
     project, part, stock, tools, machine, L, barR, cutW: w, real,
     zEnd: L + 0.5 * w,
     envelopeFor(tool) {
-      const back = tool.backAngle ?? Math.max(5, 180 - 93 - (tool.insertAngle || 35));
-      return turnableEnvelope(real, back);
+      // arka kenar serbest açısı ve ana kenarın öne eğimi ucun gerçek geometrisinden (insertEdges = çizim = kesme modeli);
+      // arka kenarla parça arasında en az 2° boşluk bırakılır (sürtme olmaz)
+      const E = tool.type === 'turn' && (tool.insertShape || tool.insertAngle) ? insertEdges(tool) : { back: 180 - 93 - (tool.insertAngle || 35), front: 0 };
+      const back = tool.backAngle ?? (E.round ? 89 : Math.max(1, E.back - 2));
+      return turnableEnvelope(real, back, E.round ? 0 : E.front);
     },
     /** z konumundaki parça yarıçapı (bitmiş) */
     rAt(z) { return real.at(z); },

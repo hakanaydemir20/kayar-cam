@@ -91,10 +91,11 @@ function turningTool(t) {
   const shape = new THREE.Shape(); pts.forEach(([x, y], i) => (i ? shape.lineTo(x, y) : shape.moveTo(x, y))); shape.closePath();
   const hp = new THREE.Path(); hp.absarc(c[0], c[1], hole, 0, Math.PI * 2, true); shape.holes.push(hp);
   const T = 3.18;
-  const ig = new THREE.ExtrudeGeometry(shape, { depth: T - 0.3, bevelEnabled: true, bevelThickness: 0.15, bevelSize: 0.15, bevelSegments: 1, curveSegments: 24 });
+  // pah içe alınır (bevelOffset): ağın dış sınırı = dış hat = simülasyonun kesme modeli
+  const ig = new THREE.ExtrudeGeometry(shape, { depth: T - 0.3, bevelEnabled: true, bevelThickness: 0.15, bevelSize: 0.15, bevelOffset: -0.15, bevelSegments: 1, curveSegments: 24 });
   ig.translate(0, 0, -T / 2 + 0.15);
   ig.computeBoundingBox();
-  const off = [-ig.boundingBox.min.x, -ig.boundingBox.min.y];   // hayali uç orijinde (pah payı dahil)
+  const off = [0, 0];   // dış hat zaten hayali uç orijinde (insertOutline)
   const ins = new THREE.Group(); ins.position.set(off[0], off[1], 0); g.add(ins);
   ins.add(new THREE.Mesh(ig, mat('tin')));
   // üst yüz çizgileri: talaş kırıcı oluğu (kenara paralel iç hat) ve vida havşası

@@ -38,7 +38,28 @@ export function waitCode(profile, n) {
  * @param {Prog[]} progs  kanal başına IR (index 0 → $1, 1 → $2)
  * @returns {{text:string, paths:string[][], lineMap:Array<Array<{opId}>>}}
  */
+/** Aynı kodla eşdeğer işlevler (her kanal kendi soğutmasını açar/kapar) — bunlar dışında bir M kodu tek işleve aittir */
+const SAME_MEANING = [['coolantOn', 'backCoolantOn'], ['coolantOff', 'backCoolantOff']];
+/** Post profilindeki çakışan kodlar: aynı M kodu birden çok işleve atanmışsa makine (ve simülasyon) yanlış işlevi çalıştırır */
+export function profileConflicts(profile) {
+  const by = new Map();
+  for (const [k, v] of Object.entries(profile.codes || {})) {
+    const c = String(v || '').trim().toUpperCase().replace(/^M0*(\d)/, 'M$1');
+    if (!c) continue;
+    (by.get(c) || by.set(c, []).get(c)).push(k);
+  }
+  const out = [];
+  for (const [c, ks] of by) {
+    if (ks.length < 2) continue;
+    if (SAME_MEANING.some(g => ks.every(k => g.includes(k)))) continue;
+    out.push({ code: c, keys: ks });
+  }
+  return out;
+}
+
 export function postProcess(progs, profile, meta = {}) {
+  const bad = profileConflicts(profile);
+  if (bad.length) throw new Error('Post profili: aynı kod birden çok işleve atanmış — ' + bad.map(b => `${b.code} = ${b.keys.join(' / ')}`).join('; ') + '. Ayarlar → Post ve makine bölümünden düzeltin.');
   const paths = [];
   const lineInfo = [];
   const allChecks = [];
@@ -144,7 +165,9 @@ function postPath(prog, P, meta, pi) {
           live: [C.liveCW, C.liveCCW, C.liveStop, P.spindleAddress.live],
           backLive: [C.backLiveCW, C.backLiveCCW, C.backLiveStop, P.spindleAddress.backLive || P.spindleAddress.live],
         }[it.which];
-        if (it.dir === 'stop') { emit(map[2]); break; }
+        // zaten duran iş mili için tekrar durdurma kodu yazılmaz (kanal başında durum bilinmez: ilk durdurma yazılır)
+        if (it.dir === 'stop') { if (st.spin?.[it.which] !== 'stop') emit(map[2]); (st.spin ||= {})[it.which] = 'stop'; break; }
+        (st.spin ||= {})[it.which] = it.dir;
         const m = it.dir === 'ccw' ? map[1] : map[0];
         if (it.css) {
           if (it.maxRpm) emit(P.maxRpm + ' ' + map[3] + fmtInt(it.maxRpm));

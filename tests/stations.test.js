@@ -23,3 +23,13 @@ describe('takım istasyonları (makine çizimi)', () => {
     expect(new Set(gang.map(t => t.yPos)).size).toBe(6);
   });
 });
+
+import { profileConflicts } from '../src/post/fanucStar.js';
+import postDef from '../src/post/postProfile.json';
+describe('post profili kod çakışması', () => {
+  it('varsayılan profilde aynı M kodu tek işleve ait', () => { expect(profileConflicts(postDef)).toEqual([]); });
+  it('çakışma yakalanır (M29 = arka soğutma kapalı / rijit kılavuz)', () => {
+    const p = { codes: { ...postDef.codes, backCoolantOff: 'M29' } };
+    expect(profileConflicts(p).map(c => c.code)).toEqual(['M29']);
+  });
+});

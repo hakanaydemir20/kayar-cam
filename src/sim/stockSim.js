@@ -1,6 +1,7 @@
 // Stok simülasyonu: silindirik yükseklik haritası r(d, θ) + eksenel delik profili rin(d).
 // d = parça ön alnından mesafe (mm). θ parça çerçevesinde açı (0 = +y, artış +z yönüne).
 // Yorumlanmış G-kod hareketleri zaman sırasında uygulanır; G0 ile malzemeye temas çarpışma sayılır.
+import { insertLowerTable } from '../tools/toolLibrary.js';
 import { movePoint } from './interpreter.js';
 import { poseOf } from './pose.js';
 import { Collider } from './collision.js';
@@ -189,19 +190,9 @@ export class Stock {
 
 // ---- takım kesme profilleri (dönen iş mili) ----
 function turnLower(tool, rp, zp) {
-  const rn = Math.max(tool.noseR || 0, 0.01);
-  const cr = rp + rn, cz = zp - rn;
-  const beta = (tool.backAngle ?? Math.max(5, 180 - 93 - (tool.insertAngle || 35))) * DEG;
-  const ut = -rn * Math.sin(beta), ht = cr - rn * Math.cos(beta), tb = Math.tan(beta);
-  return {
-    d0: cz - 6, d1: cz + rn,
-    f(d) {
-      const u = d - cz;
-      if (u > rn) return Infinity;
-      if (u >= ut) return cr - Math.sqrt(Math.max(0, rn * rn - u * u));
-      return ht + (ut - u) * tb;
-    },
-  };
+  // kesme modeli = ekrandaki ucun dış hattı (insertOutline): x takım çerçevesinde arka yana (d = zp − x)
+  const T = insertLowerTable(tool);
+  return { d0: zp - T.xMax, d1: zp - T.xMin, f: (d) => rp + T.at(zp - d) };
 }
 function bladeLower(tool, rp, zp) {
   const w = tool.width || 2;

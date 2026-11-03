@@ -57,9 +57,23 @@ export function parseInsertCode(code) {
 /** Takımın uç şekli (eski projelerde açıdan çıkarılır) */
 export function insertShapeOf(t) { return INSERT_SHAPES[t.insertShape] ? t.insertShape : shapeOfAngle(t.insertAngle); }
 
+/** ISO tutucu yaklaşma açısı κr (derece) — her uç tipinin yaygın dış tornalama tutucusu (sağ el, kayar otomat gang):
+ *  C SCLCR 95° · W WWLNR 95° · T STGCR 91° · D SDJCR 93° · V SVJCR 93° · K SKJCR 93° · S SSBCR 75°. Takımda t.approach ile değişir. */
+export const HOLDER_KAPPA = { C: 95, W: 95, T: 91, D: 93, V: 93, K: 93, S: 75 };
+
+/** Uç kenar geometrisi: κr yaklaşma açısı, back = arka (yardımcı) kenarın eksenle açısı (+ = geriye yükselir, serbest),
+ *  front = κr < 90° ise ana kenarın öne eğimi (omuza giremez). Yol üreteci, kesme modeli ve çizim aynı değerleri kullanır. */
+export function insertEdges(t) {
+  const key = insertShapeOf(t), S = INSERT_SHAPES[key];
+  if (S.round) return { kappa: 90, back: 0, front: 0, round: true };
+  const kappa = +t.approach > 0 ? +t.approach : HOLDER_KAPPA[key] ?? 93;
+  return { kappa, back: 180 - kappa - S.angle, front: Math.max(0, 90 - kappa) };
+}
+
 /**
- * Kesici uç dış hattı (takım çerçevesi: x = eksenel, y = radyal yukarı; hayali uç orijinde, uç en altta/en solda).
- * Ana kesme kenarı 93° yaklaşma; burun radyüsü yalnız kesen köşede.
+ * Kesici uç dış hattı (takım çerçevesi: x = eksenel, +x arka yana (Z−), y = radyal yukarı).
+ * Hayali uç noktası (FANUC uç yönü 3: burun merkezi − rn her iki eksende) orijinde.
+ * Ana kenar κr yaklaşma açısında, burun radyüsü kesen köşede. 3D ağ, 2D çizim ve simülasyonun kesme modeli bu hattı kullanır.
  */
 export function insertOutline(t, arcSeg = 10) {
   const key = insertShapeOf(t), S = INSERT_SHAPES[key];
@@ -69,11 +83,10 @@ export function insertOutline(t, arcSeg = 10) {
   let pts;
   if (S.round) {
     const r = L / 2, n = 48;
-    pts = Array.from({ length: n }, (_, i) => [r + r * Math.cos(Math.PI + i * 2 * Math.PI / n), r + r * Math.sin(Math.PI + i * 2 * Math.PI / n)]);
-    return normalize(pts);
+    return Array.from({ length: n }, (_, i) => [r + r * Math.cos(Math.PI + i * 2 * Math.PI / n), r + r * Math.sin(Math.PI + i * 2 * Math.PI / n)]);
   }
-  const ang = S.angle * D2R;
-  const d1 = 87 * D2R, d2 = 87 * D2R - ang;          // e1: ana kenar, e2: arka kenar
+  const ang = S.angle * D2R, { kappa } = insertEdges(t);
+  const d1 = (180 - kappa) * D2R, d2 = d1 - ang;          // e1: ana kenar, e2: arka kenar
   const e1 = [Math.cos(d1), Math.sin(d1)], e2 = [Math.cos(d2), Math.sin(d2)];
   // köşeler (uç önce, e1 boyunca → … → e2 boyunca geri)
   let poly;
@@ -94,11 +107,33 @@ export function insertOutline(t, arcSeg = 10) {
   const arc = [];
   for (let i = 0; i <= arcSeg; i++) { const a = a2 - (Math.PI - ang) * i / arcSeg; arc.push([cx + rn * Math.cos(a), cy + rn * Math.sin(a)]); }   // saat yönünde a2 → a1
   pts = [...arc, ...poly.slice(1)];
-  return normalize(pts);
-  function normalize(q) {
-    const mx = Math.min(...q.map(p => p[0])), my = Math.min(...q.map(p => p[1]));
-    return q.map(([x, y]) => [x - mx, y - my]);
+  // hayali uç = (burun merkezi x − rn, burun merkezi y − rn) → orijin
+  const ox = cx - rn, oy = cy - rn;
+  return pts.map(([x, y]) => [x - ox, y - oy]);
+}
+
+/** Ucun alt hattı tablosu (simülasyon kesme modeli): x ∈ [xMin, xMax] adım h için en alt y. Önbellekli. */
+const _lowCache = new Map();
+export function insertLowerTable(t) {
+  const key = [insertShapeOf(t), t.insertSize, t.noseR, t.approach, t.insertCode].join('|');
+  let T = _lowCache.get(key);
+  if (T) return T;
+  const pts = insertOutline(t, 24);
+  const xs = pts.map(p => p[0]), xMin = Math.min(...xs), xMax = Math.max(...xs), h = 0.005;
+  const n = Math.max(2, Math.ceil((xMax - xMin) / h) + 1), y = new Float64Array(n).fill(Infinity);
+  for (let i = 0; i < n; i++) {
+    const x = Math.min(xMax, xMin + i * h);
+    for (let j = 0; j < pts.length; j++) {
+      const [x1, y1] = pts[j], [x2, y2] = pts[(j + 1) % pts.length];
+      if ((x1 - x) * (x2 - x) > 0) continue;
+      const v = x1 === x2 ? Math.min(y1, y2) : y1 + (y2 - y1) * (x - x1) / (x2 - x1);
+      if (v < y[i]) y[i] = v;
+    }
   }
+  T = { xMin, xMax, h, n, y, at(x) { if (x < xMin || x > xMax) return Infinity; const u = (x - xMin) / h, i = Math.min(n - 2, Math.floor(u)), f = u - i; return y[i] + (y[i + 1] - y[i]) * f; } };
+  if (_lowCache.size > 200) _lowCache.clear();
+  _lowCache.set(key, T);
+  return T;
 }
 
 /** Sık kullanılan ISO kesici uçlar (tornalama) — her uç tipinden en yaygın 5 kod */

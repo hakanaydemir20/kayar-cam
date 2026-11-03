@@ -1,6 +1,6 @@
 // ISO kesici uç kodları ve uç dış hattı
 import { describe, it, expect } from 'vitest';
-import { parseInsertCode, insertOutline, INSERT_SHAPES, makeTool } from '../src/tools/toolLibrary.js';
+import { parseInsertCode, insertOutline, insertEdges, INSERT_SHAPES, makeTool } from '../src/tools/toolLibrary.js';
 
 describe('kesici uç', () => {
   it('ISO kodları çözülür', () => {
@@ -14,9 +14,12 @@ describe('kesici uç', () => {
   for (const k of Object.keys(INSERT_SHAPES)) {
     it(k + ' dış hattı: hayali uç orijinde, uç açısı doğru', () => {
       const t = makeTool({ type: 'turn', insertShape: k, noseR: 0.4 });
-      const p = insertOutline(t);
-      expect(Math.min(...p.map(q => q[0]))).toBeCloseTo(0, 9);
-      expect(Math.min(...p.map(q => q[1]))).toBeCloseTo(0, 9);
+      // hayali uç (FANUC uç yönü 3) = burun merkezi − rn: ince örneklenmiş burun yayı iki eksene de teğet
+      const p = insertOutline(t, 400);
+      const E = insertEdges(t);
+      expect(Math.min(...p.map(q => q[1]))).toBeCloseTo(0, 4);
+      if (E.kappa >= 90) expect(Math.min(...p.map(q => q[0]))).toBeCloseTo(0, 4);
+      else expect(Math.min(...p.map(q => q[0]))).toBeLessThan(0);   // κr < 90°: ana kenar ucun önüne eğik
       expect(t.insertAngle).toBe(INSERT_SHAPES[k].angle);
       // hayali uç (0,0) şeklin dışında kalır (burun radyüsü kadar), şekil içine 0.4 mm'den fazla girmez
       const minD = Math.min(...p.map(([x, y]) => Math.hypot(x, y)));

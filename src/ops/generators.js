@@ -7,6 +7,7 @@ import { textStrokes, unsupportedChars } from '../geom/strokeFont.js';
 import { subNut, subBodies, backBodies } from '../sim/bodies.js';
 import { moved, subHitsBack } from '../sim/collision.js';
 import { LAYOUT } from '../sim/frames.js';
+import { insertEdges } from '../tools/toolLibrary.js';
 
 const r3 = round3;
 const DEG = Math.PI / 180;
@@ -1136,8 +1137,9 @@ GEN.backTurn = (prog, ctx, op, tool) => {
   const zLim = r3(backMaxDepth(ctx));       // pens somunu arka takım uç düzlemine 1 mm'den fazla yaklaşmaz
   if (zLim < 0.3) throw new Error(`${op.name}: parça karşı iş milinden yeterince çıkmıyor (tutma ${grip} mm)`);
   const B = ctx.backProfile();
-  const back = tool.backAngle ?? Math.max(5, 180 - 93 - (tool.insertAngle || 35));
-  const env = turnableEnvelope(B, back);
+  const E = insertEdges(tool);
+  const back = tool.backAngle ?? (E.round ? 89 : Math.max(1, E.back - 2));
+  const env = turnableEnvelope(B, back, E.round ? 0 : E.front);
   const P = noseTipPath(env, tool.noseR);
   const Pr = noseTipPath(dilate(env, p.allowZ, p.allowX / 2), tool.noseR);
   const R0 = ctx.barR, rn = tool.noseR, bs = ctx.backStock || 0;
