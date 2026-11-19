@@ -206,7 +206,7 @@ await page.click('.gtool [data-view2="3d"]');
 await page.click('#btnOpen'); await page.waitForTimeout(200);
 await page.locator('.menu.open .dd button', { hasText: 'Boş G-kod' }).click(); await page.waitForTimeout(400);
 await page.locator('.modal.on .btn.pri').click(); await page.waitForTimeout(2000);
-await page.locator('.ged-ta').click();
+await page.locator('.ged-combined .ged-ta').click();
 await page.keyboard.press('Control+End');
 await page.keyboard.type('G1 Z6. F0.08');
 await page.keyboard.press('Enter');

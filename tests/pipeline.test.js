@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { newProject, runPipeline } from '../src/project.js';
+import { runPipeline } from '../src/project.js';
+import { newStarProject as newProject } from './helpers.js'; // Star yazımına özgü beklentiler
 
 describe('uçtan uca program', () => {
   const p = newProject();

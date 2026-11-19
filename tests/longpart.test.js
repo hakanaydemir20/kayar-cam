@@ -1,6 +1,7 @@
 // Kılavuz burç segmentasyonu ve uzun parça (Z1 stroku 205 mm'den uzun) için ara bağlama
 import { describe, it, expect } from 'vitest';
-import { newProject, runPipeline } from '../src/project.js';
+import { runPipeline } from '../src/project.js';
+import { newStarProject as newProject } from './helpers.js'; // Star yazımına özgü beklentiler
 import { makePart, profileFromTable } from '../src/part/part.js';
 import { makeOp } from '../src/ops/program.js';
 import { StockSim, buildTarget, compare } from '../src/sim/stockSim.js';

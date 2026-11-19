@@ -150,10 +150,11 @@ function turningTool(t) {
 function bladeTool(t) {
   const g = new THREE.Group();
   const w = t.width || 2;
-  const tip = box(w, 3.5, 4, 'tin', -w / 2, 1.75, 0);
+  const cx = t.zRef === 'back' ? w / 2 : -w / 2;   // referans kenar: ön (varsayılan) ya da ayna tarafı
+  const tip = box(w, 3.5, 4, 'tin', cx, 1.75, 0);
   g.add(tip);
   // Swiss gang bıçak tutucusu: bıçak sapa ortalı, ~12 mm yükseklik (komşu takımlara taşmaz)
-  const blade = box(w * 0.85, 22, 12, 'darkSteel', -w / 2, 13, 0);
+  const blade = box(w * 0.85, 22, 12, 'darkSteel', cx, 13, 0);
   g.add(blade);
   const clamp = box(w * 0.85 + 8, 12, 14, 'blackOx', -w / 2 + 2, 28, 0);
   g.add(clamp);

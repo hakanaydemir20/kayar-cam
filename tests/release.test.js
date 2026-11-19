@@ -1,6 +1,7 @@
 // Parça bırakma makrosu: bırakma konumu, hava üfleme, pens açma, itici; strok denetimi
 import { describe, it, expect } from 'vitest';
-import { newProject, runPipeline } from '../src/project.js';
+import { runPipeline } from '../src/project.js';
+import { newStarProject as newProject } from './helpers.js'; // Star yazımına özgü beklentiler
 import { StockSim } from '../src/sim/stockSim.js';
 
 describe('parça bırakma', () => {

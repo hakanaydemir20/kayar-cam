@@ -528,7 +528,7 @@ export class MachineModel {
     // takım görünürlüğü: all | ghost | active | none
     const mode = this.toolMode || 'ghost';
     if (this.frontUnit) {
-      const a = mode === 'none' ? 0 : mode === 'all' || (tool1 && tool1.unit === 'front') ? 1 : 0.22;
+      const fa = tool1 && tool1.unit === 'front'; const a = mode === 'none' ? 0 : mode === 'all' || fa ? 1 : mode === 'ghost' ? 0.22 : 0;
       if (a !== this._frontAlpha) { for (const m of this.frontUnit) { m.transparent = a < 1; m.opacity = a; m.depthWrite = a === 1; m.needsUpdate = true; } this._frontAlpha = a; }
     }
     for (const [, v] of this.tools) {

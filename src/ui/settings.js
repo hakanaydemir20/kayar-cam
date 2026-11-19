@@ -11,7 +11,7 @@ export const SETTINGS = [
     ['cabin', 'Dış kaporta', 'bool', false, 'Makinenin dış sacı ve kapıları'],
     ['holders', 'Takım tutma blokları', 'bool', false, 'Gang plakası, çapraz ve kovan blokları, arka ünite gövdesi'],
     ['bareTools', 'Yalnız takımlar (uç ve kater)', 'bool', false, 'Tutma blokları, pens somunu, kovan ve tahrikli iş mili gövdesi gizlenir; yalnız kesici takımlar görünür'],
-    ['tools', 'Takımlar', 'select', 'none', 'Makinedeki takımların görünümü', [['none', 'Gizli'], ['all', 'Taretteki bütün takımlar'], ['ghost', 'Çalışan + diğerleri saydam'], ['active', 'Yalnız çalışan takım']]],
+    ['tools', 'Takımlar', 'select', 'active', 'Makinedeki takımların görünümü', [['none', 'Gizli'], ['all', 'Taretteki bütün takımlar'], ['ghost', 'Çalışan + diğerleri saydam'], ['active', 'Yalnız çalışan takım']]],
     ['path', 'Takım yolu', 'select', 'all', '', [['all', 'Tümü'], ['op', 'Çalışan işlem'], ['sel', 'Seçili işlem'], ['none', 'Gizli']]],
     ['ghost', 'Hedef parça (saydam)', 'bool', true, 'Bitmiş parçanın hayaleti'],
     ['edges', 'Kenar çizgileri', 'bool', true, 'Gölgeli + kenarlı görünüm (SolidWorks gibi)'],
@@ -62,6 +62,8 @@ export function loadSettings() {
   if (o._v < 3) { o.body = false; o.cabin = false; o.holders = false; o._v = 3; }
   // ayar sürümü 4: takımlar ve tutma blokları varsayılan gizli
   if (o._v < 4) { o.tools = 'none'; o.holders = false; o._v = 4; }
+  // ayar sürümü 5: çalışan takım (kesici uç) her zaman görünür; diğer takımlar gizli
+  if (o._v < 5) { if (o.tools === 'none') o.tools = 'active'; o._v = 5; }
   return o;
 }
 export function saveSettings(o) { try { localStorage.setItem(KEY, JSON.stringify(o)); } catch { /* */ } }

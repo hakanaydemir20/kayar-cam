@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="735" viewBox="0 0 1100 735" role="img" aria-labelledby="title desc">
+  <title id="title">STAR SB-20R Type G Variation 04 · Makine kinematiği</title>
+  <desc id="desc">Ölçeksiz işlev şeması. Ana mil, kılavuz, karşı mil, ön takım kızağı ve takım grupları.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto-start-reverse" markerUnits="userSpaceOnUse" viewBox="0 0 8 6">
+      <path d="M0 0L8 3L0 6Z" fill="#096783"/>
+    </marker>
+    <style>
+      text {font-family:Arial,sans-serif;fill:#17364a}
+      .h {font-size:31px;font-weight:bold}
+      .sub {font-size:17px;fill:#4b6374}
+      .label {font-size:18px;font-weight:bold}
+      .body {font-size:16px}
+      .small {font-size:14px}
+      .box {fill:#fff;stroke:#8caabc;stroke-width:1.4}
+      .axis {fill:none;stroke:#096783;stroke-width:2.4;marker-start:url(#arrow);marker-end:url(#arrow)}
+      .spin {fill:none;stroke:#096783;stroke-width:2.4;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1100" height="735" fill="#f2f7fa"/>
+  <text x="32" y="49" class="h">STAR SB-20R Type G · Variation 04</text>
+  <text x="33" y="78" class="sub">Makine kinematiği ve takım grupları</text>
+  <text x="1068" y="77" text-anchor="end" class="label">ÖLÇEKSİZ İŞLEV ŞEMASI</text>
+  <rect x="32" y="102" width="1036" height="253" rx="8" class="box"/>
+  <text x="55" y="135" class="label">İş parçası ekseni ve mil hareketleri</text>
+  <line x1="72" y1="231" x2="1020" y2="231" stroke="#587588" stroke-width="1.4" stroke-dasharray="10 5 2 5"/>
+  <rect x="105" y="194" width="188" height="74" rx="4" fill="#dcebf2" stroke="#4c738a" stroke-width="2"/>
+  <rect x="293" y="213" width="32" height="36" fill="#8baabe" stroke="#4c738a" stroke-width="2"/>
+  <rect x="325" y="225" width="467" height="12" fill="#a6cbd7" stroke="#4c738a"/>
+  <path d="M407 214V200h34v14 M407 248v14h34v-14" fill="none" stroke="#4c738a" stroke-width="6"/>
+  <rect x="792" y="213" width="32" height="36" fill="#8baabe" stroke="#4c738a" stroke-width="2"/>
+  <rect x="824" y="194" width="166" height="74" rx="4" fill="#dcebf2" stroke="#4c738a" stroke-width="2"/>
+  <text x="199" y="220" text-anchor="middle" class="label">Ana mil · P1</text>
+  <text x="199" y="252" text-anchor="middle" class="small">Kayar başlık ve pens</text>
+  <text x="907" y="220" text-anchor="middle" class="label">Karşı mil · P2</text>
+  <text x="907" y="252" text-anchor="middle" class="small">Taşıyıcı ve pens</text>
+  <text x="424" y="186" text-anchor="middle" class="body">Kılavuz burç</text>
+  <text x="423" y="291" text-anchor="middle" class="small">GB desteği</text>
+  <text x="577" y="215" text-anchor="middle" class="small">Çubuk / iş parçası</text>
+  <path d="M127 290H270" class="axis"/>
+  <text x="199" y="315" text-anchor="middle" class="body">Z1 eksenel öteleme</text>
+  <path d="M150 185Q190 145 239 182" class="spin"/>
+  <text x="190" y="156" text-anchor="middle" class="small">C1 dönüş</text>
+  <path d="M839 290H978" class="axis"/>
+  <text x="907" y="315" text-anchor="middle" class="body">Z2 eksenel öteleme</text>
+  <path d="M855 185Q901 145 950 182" class="spin"/>
+  <text x="901" y="156" text-anchor="middle" class="small">C2 dönüş</text>
+  <path d="M1005 202V260" class="axis"/>
+  <text x="1019" y="233" class="small">X2</text>
+  <text x="548" y="317" text-anchor="middle" class="small">NGB modunda desteği ana pens sağlar.</text>
+  <text x="1039" y="338" text-anchor="end" class="small">X2 yanal taşıyıcı hareketi</text>
+
+  <rect x="32" y="370" width="1036" height="63" rx="8" class="box"/>
+  <text x="55" y="408" class="label">Ön takım kızağı · P1</text>
+  <text x="327" y="408" class="body">↕ X1 radyal hareket · NC’de çap değeri</text>
+  <text x="701" y="408" class="body">⊙ Y1 yanal hareket · kesit düzlemine dik</text>
+
+  <rect x="32" y="449" width="509" height="111" rx="8" class="box"/>
+  <text x="55" y="478" class="label">Sabit tornalama grubu · T1–T6</text>
+  <text x="55" y="508" class="body">Atölye örnekleri · T1 kesme · T2 tornalama</text>
+  <text x="55" y="533" class="body">T3 diş/kanal · T4–T6 takılı takım BİLİNMİYOR</text>
+
+  <rect x="557" y="449" width="511" height="111" rx="8" class="box"/>
+  <text x="580" y="478" class="label">Kartuş tipi çapraz tahrikli ünite</text>
+  <text x="580" y="508" class="body">T31 · T32 · T33 · T34 · T35</text>
+  <text x="580" y="533" class="body">Beş bağımsız mil · takılı takım ve mil yönü BİLİNMİYOR</text>
+
+  <rect x="32" y="575" width="1036" height="69" rx="8" class="box"/>
+  <text x="55" y="603" class="label">Atölye NC programlarında görülen diğer çağrılar</text>
+  <text x="55" y="625" class="small">T11–T14 ön eksenel delme · T21–T24 arka takım grubu · Fiziksel istasyon eşleşmeleri BİLİNMİYOR</text>
+
+  <text x="33" y="674" class="small">Fiziksel dizilim, boyut, strok, mil merkezi ve montaj yönleri BİLİNMİYOR.</text>
+  <text x="33" y="702" class="small">Kaynaklar · MIMARI.md §§3–4 · variation04-takim-yerlesimi.md §§1–3</text>
+</svg>

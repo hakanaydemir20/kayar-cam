@@ -1,6 +1,7 @@
 // Sabit çevrim seçeneği: G83 gagalamalı delme, G84 rijit kılavuz (M29), G76 diş. Simülasyon post'un yazdığını açar.
 import { describe, it, expect } from 'vitest';
-import { newProject, runPipeline, autoOperations } from '../src/project.js';
+import { runPipeline, autoOperations } from '../src/project.js';
+import { newStarProject as newProject } from './helpers.js'; // Star yazımına özgü beklentiler
 import { makePart, profileFromTable } from '../src/part/part.js';
 import { makeOp } from '../src/ops/program.js';
 import { StockSim, buildTarget, compare } from '../src/sim/stockSim.js';

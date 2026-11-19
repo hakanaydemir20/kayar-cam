@@ -28,6 +28,7 @@ export const OP_PARAMS = {
   tap: [['featureId', 'Delik', 'feat:axialHole:front']],
   crossDrill: [['featureId', 'Çapraz delik', 'feat:crossHole'], ['peck', 'Gagalama (radyal)', 'mm']],
   areaMill: [['c', 'C açısı (yüzey yönü)', '°'], ['depth', 'Derinlik (yüzeyden)', 'mm'], ['ap', 'Kat derinliği', 'mm'], ['stepover', 'Yanal adım (×D)', ''], ['contour', 'Kenar pasosu', 'bool']],
+  simMill: [['strategy', 'Strateji', 'select:simStrategy'], ['stockLeave', 'Üst ölçü (yüzeyde kalacak)', 'mm'], ['approach', 'Giriş mesafesi', 'mm'], ['ap', 'Talaş derinliği (kat)', 'mm'], ['finishAllow', 'Finiş payı (kabada bırakılır)', 'mm'], ['stepover', 'Yanal adım (×D)', ''], ['y', 'Takım ekseni Y kaydırma', 'mm'], ['feed', 'İlerleme (boş = takım)', 'mm/dak'], ['finishPass', 'Finiş pasosu', 'bool']],
   flatMill: [['featureId', 'Düzlük', 'feat:flat'], ['ap', 'Paso (radyal)', 'mm'], ['stepover', 'Yanal adım (×D)', '']],
   pocketMill: [['featureId', 'Cep', 'feat:pocket'], ['stepDown', 'Helis adımı (devir başına)', 'mm'], ['stepOver', 'Yanal adım', 'mm']],
   pickoff: [['grip', 'Tutma boyu', 'mm'], ['feed', 'Yaklaşma ilerlemesi', 'mm/dak'], ['gap', 'Hızlı yaklaşma boşluğu', 'mm'], ['dwell', 'Pens kapanma beklemesi', 's']],
@@ -108,6 +109,7 @@ export function field(obj, key, label, unit, kind, onChange, opts = {}) {
           : which === 'sideBack' ? [['back', 'Arka (karşı iş mili, tahrikli)']]
             : which === 'insertShape' ? Object.entries(INSERT_SHAPES).map(([k, d]) => [k, d.label])
             : which === 'chipGeo' ? Object.entries(CHIP_GEOS).map(([k, d]) => [k, d.label])
+            : which === 'simStrategy' ? [['parallelZ', 'Paralel (Z boyunca)'], ['circC', 'Çevresel (C boyunca)'], ['spiral', 'Sarmal (C+Z sürekli)'], ['contour', 'Kontur (yüzey kenarı)']]
             : which === 'roughStrategy' ? [['z', 'Z’ye paralel (boyuna)'], ['profile', 'Profile paralel (kontur ofset)'], ['face', 'Alın (X’e paralel)']] : []);
     inp = h('select', {}, items.map(([k, l]) => h('option', { value: k }, l)));
     inp.value = v ?? '';

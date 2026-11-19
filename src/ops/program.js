@@ -5,6 +5,7 @@ const r3g = (v) => Math.round(v * 1000) / 1000;
 import { buildContext } from './context.js';
 import { findTool } from '../tools/toolLibrary.js';
 import { rpmFromVc } from '../tools/cuttingData.js';
+import { p1Head, p1Cut, p2Head, p2Eject, p2Pick } from './kayarTemplate.js';
 
 let _opn = 0;
 export function makeOp(type, toolId = null, params = {}, name = null) {
@@ -104,6 +105,13 @@ export function buildProgram(project) {
   const flush1 = (before) => { while (off1.length && order(off1[0]) < before) runOff(p1, off1.shift()); };
 
   // ---- $1 ----
+  const K = project.post.dialect === 'kayar';   // atölye şablonu (gerçek programlar)
+  const cutTool = cut ? findTool(project.tools, cut.toolId) : null;
+  if (K) {
+    p1.opStart({ id: 'kHead1', name: 'CEVRIM BASI', type: 'head' });
+    p1Head(p1, { barDia: project.stock.barDia, L: ctx.L, cutRpm, cutW: ctx.cutW, cutFeed: cut?.params.feed || cutTool?.feed || 0.02, faceStock: project.stock.faceStock });
+    p1.opEnd({ id: 'kHead1' });
+  }
   ctx.extZ = 0;
   if (mids.length) p1.workShift(0);   // yarıda kalmış çevrimden kalan kaydırmayı temizle
   const ch1 = ops.filter(o => OP_TYPES[o.type].channel === 1 && o.type !== 'rechuck');
@@ -112,20 +120,49 @@ export function buildProgram(project) {
     flush1(op.type === 'cutoff' ? Infinity : order(op));
     if (op.type === 'cutoff') {
       if (seq[seq.length - 1].op !== op) warnings.push({ op: op.id, msg: 'Kesmeden sonra gelen ön işlemler kesmeden önce yapılacak şekilde sıralanmalı' });
+      if (K) {
+        if (!cutTool) { errors.push({ op: op.id, msg: `${op.name}: takım seçilmedi` }); continue; }
+        flush1(Infinity);
+        p1.opStart(op);
+        p1Cut(p1, { tool: cutTool, cutX0: r3(2 * Math.max(ctx.rAt(ctx.L - 0.01), ctx.rAt(ctx.L)) + 0.4), endX: +op.params.endX, feed: op.params.feed || cutTool.feed, pick: !!pick, backStock: ctx.backStock });
+        p1.opEnd(op);
+        continue;
+      }
       run(p1, op, pick ? { pick: true, ...W } : null);
     } else if (op.type === 'midRechuck') run(p1, op, midW.get(op.id));
     else run(p1, op, extra);
   }
   flush1(Infinity);
   const re = ops.find(o => o.type === 'rechuck');
+  if (K) { if (!cut) (ops.length ? errors : warnings).push({ msg: 'Atölye şablonu: çevrim N100 kesme bloğuyla biter — Kesme işlemi ekleyin' }); }
+  else {
   if (re) run(p1, re);
   if (project.post.codes.partCount) p1.m('partCount');   // parça sayacı (tanımlıysa)
   p1.coolant(false);
   p1.spindle({ which: 'main', dir: 'stop' });
   p1.rapid({ X: ctx.safeX });
   p1.m('programEnd');
+  }
 
   // ---- $2 ----
+  if (K) {
+    // atölye şablonu: P2 önce önceki parçanın arka işlemlerini yapar (G130), parçayı atar, sonra yeni parçayı alır (G131)
+    const back = ops.filter(o => OP_TYPES[o.type].channel === 2 && o.type !== 'pickoff' && o.type !== 'eject');
+    const ej = ops.find(o => o.type === 'eject');
+    if (mids.length) errors.push({ op: mids[0].id, msg: 'Ara bağlama atölye şablonunda kullanılamaz: karşı iş mili o sırada önceki parçanın arka işlemlerini yapıyor. Post Ayarları’ndan Star SB-20R profilini seçin' });
+    p2.opStart({ id: 'kHead2', name: 'KARSI MIL BASI', type: 'head' });
+    p2Head(p2, { grip: r3(ctx.grip) });
+    p2.opEnd({ id: 'kHead2' });
+    if (pick) {
+      const off2 = offsOf(2);
+      for (const op of back) { while (off2.length && order(off2[0]) < order(op)) runOff(p2, off2.shift()); run(p2, op); }
+      off2.forEach(o => runOff(p2, o));
+      if (ej) { p2.opStart(ej); p2Eject(p2, { blow: Math.max(0.5, +ej.params.blow || 0) }); p2.opEnd(ej); }
+      p2.opStart(pick); p2Pick(p2, { feed: 1.5 }); p2.opEnd(pick);
+    } else for (const op of back) errors.push({ op: op.id, msg: `${op.name}: önce Karşı İş Miline Al işlemi gerekli` });
+    if (cut && ctx.backStock > 0 && !ops.some(o => o.type === 'backTurn')) errors.push({ op: cut.id, msg: `Arka alın payı ${ctx.backStock} mm bırakılıyor ama Arka Tornalama işlemi yok` });
+    return { progs: [p1, p2], ctx, errors, warnings, cutRpm };
+  }
   const overlap = !!project.sync?.overlap && !!pick;
   const back = ops.filter(o => OP_TYPES[o.type].channel === 2 && o.type !== 'pickoff');
   if (!pick) for (const op of back) errors.push({ op: op.id, msg: `${op.name}: önce Karşı İş Miline Al işlemi gerekli` });

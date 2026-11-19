@@ -5,6 +5,7 @@ import { StockMesh } from '../view3d/stockMesh.js';
 import { profileR } from '../sim/stockSim.js';
 import { h } from './forms.js';
 import { FEATURE_LABELS, featureText } from './forms.js';
+import { ghostFromMesh } from './stepFlow.js';
 
 const DEG = 180 / Math.PI;
 const f2 = (v) => +(+v).toFixed(2);
@@ -13,6 +14,8 @@ export class FinishedView {
   constructor(app) {
     this.app = app;
     this.on = false;
+    this.compareOn = false;
+    this.overlayOn = false;
     this.group = new THREE.Group();
     this.group.visible = false;
     app.viewer.scene.add(this.group);
@@ -41,8 +44,12 @@ export class FinishedView {
       this.banner();
     } else {
       this.closePop();
+      this.compareOn = false;
+      this.overlayOn = false;
+      this.clearMesh();
       this.group.visible = false;
       document.getElementById('finBanner')?.remove();
+      document.getElementById('finComparison')?.remove();
       if (app.machine) app.machine.root.visible = true;
       app.applyOptions();
       const c = app._finCam;
@@ -59,11 +66,19 @@ export class FinishedView {
     app.viewer.setFloor(false);
     if (!T) { app.toast('Bitmiş parça modeli oluşturulamadı'); return; }
     const L = P.part.length;
-    const i0 = Math.max(0, T.idx(0)), i1 = Math.min(T.nz - 1, T.idx(L));
-    this.sm = new StockMesh(T, i0, i1);
-    this.sm.setTarget(T);                 // her hücre hedefte → parça rengi
+    const valid = this.compareOn && app.verify?.ss.sim === app.result?.sim && !app.verify.c.skipped ? app.verify : null;
+    const S = valid ? valid.ss.resultStock() : T;
+    const i0 = Math.max(0, S.idx(0)), i1 = Math.min(S.nz - 1, S.idx(L));
+    this.sm = new StockMesh(S, i0, i1);
+    this.sm.setTarget(T);
+    if (valid) this.sm.setStatusColors(valid.c.status, valid.c.innerStatus);
     this.sm.setEdges(true);
     this.group.add(this.sm.mesh);
+    if (!this.hasStep()) this.overlayOn = false;
+    if (this.compareOn && this.overlayOn) {
+      this.overlay = ghostFromMesh(P.part);
+      this.group.add(this.overlay);
+    }
     this.group.position.set(L / 2, 0, 0);  // parça ortası dünya merkezinde
     this.group.visible = true;
     if (frame) {
@@ -74,20 +89,61 @@ export class FinishedView {
   }
   clearMesh() {
     if (this.sm) { this.sm.mesh.removeFromParent(); this.sm.dispose(); this.sm = null; }
+    if (this.overlay) {
+      this.overlay.removeFromParent();
+      this.overlay.traverse(node => { node.geometry?.dispose(); node.material?.dispose(); });
+      this.overlay = null;
+    }
+  }
+
+  refreshComparison() {
+    if (this.on && this.compareOn) { this.rebuild(); this.banner(); }
+  }
+  hasStep() {
+    const part = this.app.project.part;
+    return part.meshFmt === 'step' && !!part.mesh && !!part.fixture;
   }
 
   banner() {
     document.getElementById('finBanner')?.remove();
+    document.getElementById('finComparison')?.remove();
+    const app = this.app;
+    const canCompare = !!app.result?.sim && app.project.part.source !== 'gcode';
+    const hasStep = this.hasStep();
     const b = h('div', { class: 'fin-banner', id: 'finBanner' },
       h('b', {}, 'Bitmiş parça'),
-      h('span', {}, 'İşlem eklemek için parçada bir yüzeye tıklayın'),
+      h('button', { class: 'btn mini', disabled: !canCompare, 'aria-pressed': String(this.compareOn), onclick: () => {
+        this.compareOn = !this.compareOn;
+        this.clearHl(); this.closePop();
+        this.rebuild(); this.banner();
+        if (this.compareOn && app.verify?.ss.sim !== app.result?.sim) app.runVerify();
+      } }, this.compareOn ? 'Hedefe dön' : 'Hedefle karşılaştır'),
+      h('button', { class: 'btn mini', disabled: !hasStep || !this.compareOn, 'aria-pressed': String(this.overlayOn), onclick: () => {
+        this.overlayOn = !this.overlayOn;
+        this.rebuild(); this.banner();
+      } }, 'STEP katmanı'),
       h('button', { class: 'btn mini', onclick: () => this.toggle(false) }, 'Simülasyona dön'));
     document.getElementById('centerPanel').append(b);
+    if (this.compareOn) {
+      const c = app.verify?.ss.sim === app.result?.sim ? app.verify?.c : null;
+      const pct = n => c?.cells ? (n * 100 / c.cells).toFixed(1) + '%' : '—';
+      const metrics = c && !c.skipped ? [
+        h('div', {}, 'Yeşil · tolerans içinde · ' + pct(c.cells - c.over - c.under)),
+        h('div', {}, 'Kırmızı · fazla kesim · ' + pct(c.over) + ' · en çok ' + c.overMax.toFixed(3) + ' mm'),
+        h('div', {}, 'Mavi · kalan malzeme · ' + pct(c.under) + ' · en çok ' + c.underMax.toFixed(3) + ' mm'),
+        h('div', {}, 'İç çap örnekleri · fazla ' + c.innerOver + ' · eksik ' + c.innerUnder),
+        h('div', {}, 'Çarpışma kaydı · ' + app.verify.ss.collisions.length),
+        h('div', {}, 'Dış sapmalar radyal; yüzdeler örnek hücre oranıdır. Alın yüzleri ve geçersiz örnekler gri.'),
+        h('div', {}, hasStep ? 'Renkler STEP’ten tanınan CAM hedefini ölçer. STEP katmanı özgün ağı gösterir.' : 'Renkler tanımlanan CAM hedefini ölçer.'),
+        h('div', {}, 'Eşikler: fazla 0,02 mm · kalan 0,03 mm.'),
+      ] : [h('div', {}, 'Karşılaştırma hazırlanıyor. Sonuç alınamazsa Verify panelinden yeniden çalıştırın.')];
+      b.after(h('div', { id: 'finComparison', class: 'fin-comparison', role: 'status' }, ...metrics));
+    }
   }
 
   // ------------------------------------------------------------ seçim
   pick(e) {
-    if (!this.sm) return;
+    if (!this.sm || this.compareOn) return;
     const v = this.app.viewer, el = v.renderer.domElement, r = el.getBoundingClientRect();
     const ray = new THREE.Raycaster();
     ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), v.camera);

@@ -1,7 +1,8 @@
 // Tam makine çarpışma kontrolü: bilinen hatalı kurulumları yakalamalı, doğru programda yanlış alarm vermemeli.
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { newProject, runPipeline } from '../src/project.js';
+import { runPipeline } from '../src/project.js';
+import { newStarProject as newProject } from './helpers.js'; // Star yazımına özgü beklentiler
 import { makePart, profileFromTable } from '../src/part/part.js';
 import { makeOp } from '../src/ops/program.js';
 import { StockSim } from '../src/sim/stockSim.js';

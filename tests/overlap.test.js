@@ -1,6 +1,7 @@
 // Örtüşen çevrim (ESPRIT tarzı): arka işlemler önceki parçada, ön işlemlerle aynı anda
 import { describe, it, expect } from 'vitest';
-import { newProject, runPipeline } from '../src/project.js';
+import { runPipeline } from '../src/project.js';
+import { newStarProject as newProject } from './helpers.js'; // Star yazımına özgü beklentiler
 import { StockSim, buildTarget, compare } from '../src/sim/stockSim.js';
 import { makeOp } from '../src/ops/program.js';
 

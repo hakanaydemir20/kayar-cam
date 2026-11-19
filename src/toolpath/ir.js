@@ -8,7 +8,7 @@ export class Prog {
   }
   push(it) { this.items.push(it); return this; }
   comment(text) { return this.push({ k: 'comment', text }); }
-  opStart(op) { return this.push({ k: 'op', id: op.id, name: op.name }); }
+  opStart(op) { return this.push({ k: 'op', id: op.id, name: op.name, type: op.type }); }
   opEnd(op) { return this.push({ k: 'opEnd', id: op.id }); }
   tool(tool) { return this.push({ k: 'tool', tool }); }
   workOffset(code) { return this.push({ k: 'wo', code }); }

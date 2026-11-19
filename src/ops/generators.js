@@ -8,6 +8,8 @@ import { subNut, subBodies, backBodies } from '../sim/bodies.js';
 import { moved, subHitsBack } from '../sim/collision.js';
 import { LAYOUT } from '../sim/frames.js';
 import { insertEdges } from '../tools/toolLibrary.js';
+import { toPart } from '../cad/featureRecog.js';
+import { genSimMill } from './simMill.js';
 
 const r3 = round3;
 const DEG = Math.PI / 180;
@@ -25,6 +27,7 @@ export const OP_TYPES = {
   flatMill:   { label: 'Düzlük Frezeleme', channel: 1, tools: ['endmill'] },
   areaMill:   { label: 'Bölgesel Frezeleme (C/Y)', channel: 1, tools: ['endmill'] },
   pocketMill: { label: 'Helikal Cep (G19)', channel: 1, tools: ['endmill'] },
+  simMill:    { label: 'Simültane Frezeleme (X-Y-Z-C)', channel: 1, tools: ['endmill'] },
   pickoff:    { label: 'Karşı İş Miline Al', channel: 2, tools: [] },
   cutoff:     { label: 'Kesme', channel: 1, tools: ['cutoff'] },
   backDrill:  { label: 'Arka Delme', channel: 2, tools: ['drill', 'center'] },
@@ -52,6 +55,7 @@ export function defaultParams(type) {
     case 'tap': return { featureId: null };
     case 'crossDrill': return { featureId: null, peck: null };
     case 'flatMill': return { featureId: null, ap: 1.0, stepover: 0.6, pattern: 'zigzagZ' };
+    case 'simMill': return { faceIds: [], strategy: 'parallelZ', stockLeave: 0, approach: 1, ap: 0.5, finishAllow: 0.1, stepover: 0.25, y: 0, finishPass: true, feed: null };
     case 'areaMill': return { c: 0, depth: 1, ap: 0.5, stepover: 0.5, pattern: 'zigzagY', contour: true, region: [{ z: 5, y: -3 }, { z: 15, y: -3 }, { z: 15, y: 3 }, { z: 5, y: 3 }] };
     case 'pocketMill': return { featureId: null, stepDown: 0.5, stepOver: 0.5 };
     case 'pickoff': return { grip: 6, feed: 500, gap: 1, dwell: 0.3 };
@@ -491,7 +495,8 @@ function drillOnSpindle(prog, ctx, op, tool, which) {
     Zend = f.depth + (f.through ? tipLen(tool) + 0.5 : tipLen(tool));
     if (which === 'main' && Zend > frontDrillReach(tool) + 1e-6) throw new Error(`${op.name}: delik derinliği (${r3(f.depth)} mm + uç ${r3(Zend - f.depth)}) Ø${tool.dia} matkabın önden erişimini aşıyor (en çok Z${r3(frontDrillReach(tool))}: ağız boyu / ön kovan bloğu). Kaba otomatik deliği önden ve arkadan bölerek planlar; ya da daha uzun ağızlı matkap seçin.`);
   }
-  const peck = tool.type === 'center' ? 0 : (p.peck || tool.dia * 1.5);
+  // atölye (kayar) G83: küçük gagalar (örnek programlarda Q100–Q1000 µm) → ≈0.4×D
+  const peck = tool.type === 'center' ? 0 : (p.peck || tool.dia * (ctx.project.post.dialect === 'kayar' && ctx.project.post.cycles?.drill ? 0.4 : 1.5));
   axialDrillCycle(prog, ctx, r3(Zend), r3(peck), p.feed || tool.feed);
   prog.coolant(false, which === 'sub');
 }
@@ -1035,6 +1040,8 @@ GEN.areaMill = (prog, ctx, op, tool) => {
   endLive(prog, ctx);
 };
 
+GEN.simMill = (prog, ctx, op, tool) => genSimMill(prog, ctx, op, tool, { toPart, startLive, endLive, liveData });
+
 /** Çokgen (altıgen, kare…): her kenar bir düzlük, C ile indekslenir */
 GEN.polygonMill = (prog, ctx, op, tool) => {
   const f = featureOf(ctx, op, 'polygon');
@@ -1157,6 +1164,11 @@ GEN.backTurn = (prog, ctx, op, tool) => {
       prog.rapid({ Z: r3(z - 0.5) });
     }
     prog.rapid({ X: xOut });
+  }
+  if (p.faceOnly) {
+    prog.rapid({ Z: -5 });
+    prog.coolant(false, true);
+    return;
   }
   // kaba (profil arka açı içinde ulaşılabiliyorsa)
   roughLevels(prog, ctx, Pr, R0, -0.5, zLim, { ...p, retract: 0.3 }, Fr);

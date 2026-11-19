@@ -1,6 +1,7 @@
 // Burçsuz (N.G.B.) çalışma: kısa parça hatasız ve çarpışmasız; uzun parça açıklayıcı hata; pens somunu çarpışma kontrolünde
 import { describe, it, expect } from 'vitest';
-import { newProject, runPipeline } from '../src/project.js';
+import { runPipeline } from '../src/project.js';
+import { newStarProject as newProject } from './helpers.js'; // Star yazımına özgü beklentiler
 import { StockSim, buildTarget, compare } from '../src/sim/stockSim.js';
 import { makePart, profileFromTable } from '../src/part/part.js';
 import { Collider, moved, intersects } from '../src/sim/collision.js';

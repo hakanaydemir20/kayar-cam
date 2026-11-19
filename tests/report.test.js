@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { newProject, runPipeline } from '../src/project.js';
+import { runPipeline } from '../src/project.js';
+import { newStarProject as newProject } from './helpers.js'; // Star yazımına özgü beklentiler
 import { barFlow, setupSheetHtml, profileSvg } from '../src/ui/report.js';
 
 describe('çubuk akışı ve kurulum föyü', () => {

@@ -1,6 +1,7 @@
 // C/Y frezeleme (çokgen, G7.1) ve arka işlemler (arka tornalama, C2 kanal, G12.1) uçtan uca
 import { describe, it, expect } from 'vitest';
-import { newProject, runPipeline, autoOperations } from '../src/project.js';
+import { runPipeline, autoOperations } from '../src/project.js';
+import { newStarProject as newProject } from './helpers.js'; // Star yazımına özgü beklentiler
 import { makePart, profileFromTable } from '../src/part/part.js';
 import { makeOp } from '../src/ops/program.js';
 import { StockSim, buildTarget, compare } from '../src/sim/stockSim.js';
