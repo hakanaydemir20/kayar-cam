@@ -6,6 +6,8 @@ import { movePoint } from './interpreter.js';
 import { poseOf } from './pose.js';
 import { Collider } from './collision.js';
 import { engraveStrokes } from '../ops/generators.js';
+import { surfaceCloud, selRegion } from '../ops/simMill.js';
+import { toPart } from '../cad/featureRecog.js';
 
 const DEG = Math.PI / 180;
 
@@ -196,7 +198,8 @@ function turnLower(tool, rp, zp) {
 }
 function bladeLower(tool, rp, zp) {
   const w = tool.width || 2;
-  return { d0: zp, d1: zp + w, f: () => rp };
+  // zRef 'back': takım Z referansı ayna tarafı kenar (atölye ofset alışkanlığı) → kesik [zp−w, zp]
+  return tool.zRef === 'back' ? { d0: zp - w, d1: zp, f: () => rp } : { d0: zp, d1: zp + w, f: () => rp };
 }
 /** Hareketin t anındaki makine konumu. Yayda (G2/G3, her düzlem) program noktası + sabit ofset — doğrusal
  *  ara değer yayın ortasını kaçırır (G19 helis cebinde Z değişimi kaybolurdu). Bkz. pose.js poseOf. */
@@ -238,10 +241,19 @@ export class StockSim {
     this.moves = [];
     for (const p of sim.paths) for (const m of p.moves) if (!opts.only || m.path === opts.only) this.moves.push(m);
     this.moves.sort((a, b) => a.t0 - b.t0 || a.path - b.path);
+    // elle yazılan G-kod: hedef parça boyu yok → ızgara, P1'in kesici takımla gittiği en uzak Z'yi kapsar (en çok 400 mm)
+    if (project.part.source === 'gcode') {
+      let zm = 0;
+      for (const m of this.moves) if (m.path === 1 && m.state?.tool && Number.isFinite(m.to?.Z)) zm = Math.max(zm, m.to.Z);
+      this.opts.dMax = Math.min(400, Math.max(this.opts.dMax, zm + this.cutW + 2));
+    }
+    // ölçüm hassasiyeti (inceleme penceresi): daha ince ızgara
+    if (opts.grid?.dz > 0) this.opts.dz = opts.grid.dz;
+    if (opts.grid?.nth > 0) this.opts.nth = Math.round(opts.grid.nth / 8) * 8;
     this.totalTime = Math.max(0, ...sim.paths.map(p => p.totalTime || 0));
     this.collider = opts?.bodies === false ? null : new Collider(project, this);
     // örtüşen çevrim: karşı iş mili çevrim başında önceki parçayı tutar (ön işlemleri bu programın $1'i ile yapılmış)
-    this.overlap = !opts.only && !!project.sync?.overlap && !!project.ops.find(o => o.type === 'pickoff' && o.enabled) && sim.paths.length > 1;
+    this.overlap = !opts.only && (!!project.sync?.overlap || project.post?.dialect === 'kayar') && !!project.ops.find(o => o.type === 'pickoff' && o.enabled) && sim.paths.length > 1;
     if (this.overlap) {
       const pre = new StockSim(project, sim, { only: 1, bodies: false }).runAll();
       this.prevTemplate = pre.stock.clone();
@@ -303,6 +315,10 @@ export class StockSim {
     if (m.kind === 'event') {
       if (fb < 1) return;
       switch (m.event) {
+        case 'zeroSet':
+          // G125 (çubuk dayamada Z sıfırı): çubuk ön alnı bu anda dayamada → parça koordinatı 0 kesme düzleminde
+          if (m.path === 1) { if (st.mainOpen) st.frontWorld = m.mTo?.Z ?? 0; else st.barOffset = 0; }   // program Z = parça koordinatı (ham alın −alın payında)
+          break;
         case 'mainChuckOpen': st.frontWorld = this.mainFrontWorld(m.mTo.Z); st.mainOpen = true; break;
         case 'mainChuckClose': st.mainOpen = false; st.barOffset = st.frontWorld - m.mTo.Z; break;
         case 'subChuckClose': st.subClosed = true; this.checkSeparation(); break;
@@ -663,6 +679,33 @@ export function buildTarget(project, opts) {
       }
     }
   }
+  // simültane frezeleme: seçili bölgede hedef = 3D modelin gerçek yüzeyi (+ üst ölçü)
+  for (const op of project.ops || []) {
+    if (op.type !== 'simMill' || op.enabled === false || !(op.params.faceIds || []).length) continue;
+    const part = project.part;
+    if (!part.mesh || !part.fixture) continue;
+    const cl = surfaceCloud(part.mesh, (q) => toPart(part.fixture, q), op.params.faceIds);
+    const reg = selRegion(cl);
+    if (!reg) continue;
+    const leave = Math.max(0, +op.params.stockLeave || 0);
+    const best = new Float32Array(T.nz * T.nth).fill(-1);
+    for (let k = 0; k < cl.n; k++) {
+      const i = T.idx(cl.d[k]);
+      if (i < 0 || i >= T.nz) continue;
+      let th = Math.atan2(cl.b[k], cl.a[k]); if (th < 0) th += 2 * Math.PI;
+      const j = Math.round(th / (2 * Math.PI) * T.nth) % T.nth;
+      const r = Math.hypot(cl.a[k], cl.b[k]);
+      if (r > best[i * T.nth + j]) best[i * T.nth + j] = r;
+    }
+    const inC = (j) => { if (reg.full) return true; const c = (((-j * 360 / T.nth) % 360) + 360) % 360; const c0 = reg.c0 % 360; const w = reg.c1 - reg.c0; return ((c - c0 + 360) % 360) <= w; };
+    for (let i = Math.max(0, T.idx(reg.z0)); i <= Math.min(T.nz - 1, T.idx(reg.z1)); i++) {
+      for (let j = 0; j < T.nth; j++) {
+        if (!inC(j)) continue;
+        const v = best[i * T.nth + j];
+        if (v >= 0 && v + leave < T.r[i * T.nth + j]) T.r[i * T.nth + j] = v + leave;
+      }
+    }
+  }
   return T;
 }
 
@@ -725,6 +768,7 @@ export function profileR(pts, d) {
 export function compare(stock, target, L, tolOver = 0.02, tolUnder = 0.03) {
   const n = stock.nz * stock.nth;
   const status = new Uint8Array(n);
+  status.fill(3); // ölçüm kapsamı dışında
   let over = 0, under = 0, overMax = 0, underMax = 0, cells = 0;
   const nb = (arr, i, j) => {
     // ±1 dilim komşulukta min/max (ızgara ayrıklaştırma toleransı)
@@ -757,6 +801,7 @@ export function compare(stock, target, L, tolOver = 0.02, tolUnder = 0.03) {
       const s = stock.r[k], t = target.r[k];
       if (t < 0) continue;
       cells++;
+      status[k] = 0;
       const [tmn0, tmx] = nb(target.r, i, j);
       let low = target.lowAllowed ? target.lowAllowed[i] : NaN;
       if (target.lowCell) { const [lmn] = nbNaN(target.lowCell, i, j); if (lmn < Infinity) low = Number.isNaN(low) ? lmn : Math.min(low, lmn); }
@@ -767,6 +812,7 @@ export function compare(stock, target, L, tolOver = 0.02, tolUnder = 0.03) {
   }
   // iç delik
   let innerOver = 0, innerUnder = 0;
+  const innerStatus = new Uint8Array(stock.nz).fill(3);
   for (let i = 0; i < stock.nz; i++) {
     const d = stock.dAt(i);
     if (d < 0.1 || d > L - 0.1) continue;
@@ -774,8 +820,9 @@ export function compare(stock, target, L, tolOver = 0.02, tolUnder = 0.03) {
     const s = stock.rin[i], t = target.rin[i];
     const tn = Math.min(target.rin[Math.max(0, i - 2)], target.rin[Math.min(stock.nz - 1, i + 2)], t);
     const tx = Math.max(target.rin[Math.max(0, i - 2)], target.rin[Math.min(stock.nz - 1, i + 2)], t);
-    if (s > tx + tolOver) innerOver++;
-    else if (s < tn - tolUnder && t > 0) innerUnder++;
+    if (s > tx + tolOver) { innerOver++; innerStatus[i] = 1; }
+    else if (s < tn - tolUnder && t > 0) { innerUnder++; innerStatus[i] = 2; }
+    else if (s > 0 || t > 0) innerStatus[i] = 0;
   }
-  return { status, over, under, overMax, underMax, cells, innerOver, innerUnder };
+  return { status, innerStatus, over, under, overMax, underMax, cells, innerOver, innerUnder };
 }

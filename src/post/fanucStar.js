@@ -78,8 +78,15 @@ export function postProcess(progs, profile, meta = {}) {
   return { text: '%\n' + text + '\n%\n', paths, lineInfo, checks: allChecks };
 }
 
+/** Atölye (kayar) yazımında takımın programdaki numarası: ön delme kolonu T35-k → T1k */
+export function kayarToolNum(t) { return t.unit === 'front' && t.num === 35 ? 10 + (t.offset || 1) : t.num; }
+
 function postPath(prog, P, meta, pi) {
-  const C = P.codes;
+  const K = P.dialect === 'kayar';
+  const C = K && pi === 1 ? { ...P.codes, ...(P.codes2 || {}) } : P.codes;
+  let kTool = null, kPend = null, kClamp = false;   // kayar: aktif takım, uygulanacak ofset, C kilidi
+  let kFeed = '';     // kayar: G98/G99 tek satırda yazılmaz, sonraki hareket satırına eklenir (G0G98C0T31)
+  let kCool = false;  // kayar: soğutma açık mı (tahrikli takım sonunda M7 M9 M38)
   const dec = P.decimals ?? 3;
   const lines = [];
   const info = [];
@@ -91,6 +98,8 @@ function postPath(prog, P, meta, pi) {
   let skipping = null;        // kapalı işlem: { st, intent } — bölge sonunda modal durum geri yüklenir
   const emit = (s, keepBlank = false) => {
     if (!s && !keepBlank) return;
+    if (K && s && !s.startsWith('(')) { const i = s.indexOf('('); const code = i >= 0 ? s.slice(0, i) : s; s = code.replace(/\s+/g, '') + (i >= 0 ? s.slice(i) : ''); }
+    if (K && kFeed && s && /^[GXZYCUWIK]/.test(s) && !/^G0T0|^G28|^G4[A-Z]/.test(s)) { s = /^G[0-3](?!\d)/.test(s) ? s.replace(/^(G[0-3])/, '$1' + kFeed) : kFeed + s; kFeed = ''; }
     if (P.lineNumbers && s && !s.startsWith('(') && !s.startsWith('O')) { n += P.lineStep; s = 'N' + n + ' ' + s; }
     if (skipping && s) s = (P.blockSkip || '/') + s;
     lines.push(s);
@@ -107,6 +116,8 @@ function postPath(prog, P, meta, pi) {
         continue;
       }
       const v = raw;
+      // atölye yazımı: tornalama/arka takımlarda Y yazılmaz (Y0 iken); yalnız çapraz/ön takımlar ya da Y≠0
+      if (K && a === 'Y' && Math.abs(v) < 1e-9 && (st.pos.Y == null || Math.abs(st.pos.Y) < 1e-9) && !(kTool && (kTool.unit === 'cross' || kTool.unit === 'front'))) { st.pos.Y = 0; continue; }
       if (!force && st.pos[a] != null && Math.abs(st.pos[a] - v) < 0.5 * 10 ** -dec) continue;
       w += ' ' + a + fmt(v, dec);
       st.pos[a] = v;
@@ -129,31 +140,66 @@ function postPath(prog, P, meta, pi) {
     if (lines.length && !skipping) checks.push({ line: lines.length - 1, pos: { ...intent } });
   };
 
+  if (K) {
+    emit('<' + cleanComment(meta.partName || 'PARCA').replace(/\s+/g, '') + (P.fileSuffix ? P.fileSuffix[pi] : '-P' + (pi + 1)) + '>');
+    if (pi === 0 && meta.date) emit('(' + cleanComment('KAYAR CAM ' + meta.date) + ')');
+    st.plane = 'zx'; st.feedMode = 'rev';
+  }
   const progNo = String(P.programNumber).padStart(4, '0');
-  emit('O' + progNo + ' (' + cleanComment((meta.partName || 'PARCA') + (pi ? ' ARKA' : ' ON')) + ')');
-  if (pi === 0) {
+  if (!K) emit('O' + progNo + ' (' + cleanComment((meta.partName || 'PARCA') + (pi ? ' ARKA' : ' ON')) + ')');
+  if (pi === 0 && !K) {
     emit('(' + cleanComment('KAYAR CAM - ' + P.name) + ')');
     if (meta.date) emit('(' + cleanComment('TARIH ' + meta.date) + ')');
     if (meta.stock) emit('(' + cleanComment(meta.stock) + ')');
     if (!P.verified) emit('(' + cleanComment('POST DOGRULANMADI - KURU CALISTIRIN') + ')');
   }
-  emit('G18 G21 G40 G80 G97 G99');
-  st.plane = 'zx';
+  if (!K) { emit('G18 G21 G40 G80 G97 G99'); st.plane = 'zx'; }
+  const homeOut = () => { emit('G0T0'); emit(pi === 0 ? 'G28U0' : 'G28W0.'); st.pos = {}; st.motion = 'G0'; intent = {}; };
+  const closeTool = () => {
+    if (!(K && kTool)) return;
+    if (kClamp) { emit(C.cUnclamp); kClamp = false; }
+    // ön delme kolonu (T11–T13): atölyedeki gibi G0Z-5 ile alından uzaklaş, sonra ofset iptali
+    if (kTool.unit === 'front' && pi === 0 && (st.pos.Z == null || st.pos.Z > -5)) { st.motion = null; emit('G0Z-5.'); }
+    homeOut(); kTool = null; kPend = null;
+  };
+  // kesme/kanal takımı ayna tarafı kenar referanslı (zRef 'back'): program Z = IR Z (ön kenar) + genişlik
+  const bz = (it) => (K && kTool && kTool.zRef === 'back' && it.pos?.Z != null) ? { ...it, pos: { ...it.pos, Z: +it.pos.Z + (kTool.width || 2) } } : it;
+  const offWord = () => { if (!kPend) return ''; const w = 'T' + kPend; kPend = null; return w; };
+  const cMove = (pos) => K && pos.C != null && (st.pos.C == null || Math.abs(st.pos.C - pos.C) > 1e-9);
 
-  for (const it of prog.items) {
+  for (let it of prog.items) {
     switch (it.k) {
       case 'op': curOp = it.id; emit(''); emit('(' + cleanComment(it.name) + ')'); break;
       case 'opEnd': break;
       case 'comment': emit('(' + cleanComment(it.text) + ')'); break;
       case 'blank': break;
       case 'skip':
+        if (K && kFeed) { emit(kFeed); kFeed = ''; }   // bekleyen G98/G99 blok atlamalı satıra kalmasın
         if (it.on) skipping = { st: { ...st, pos: { ...st.pos } }, intent: { ...intent } };
         else if (skipping) { Object.assign(st, skipping.st); intent = skipping.intent; skipping = null; }
         break;
-      case 'raw': emit(it.text); break;
-      case 'wo': if (st.wo !== it.code) { emit(it.code); st.wo = it.code; st.pos = {}; st.motion = null; intent = {}; } break; // koordinat değişti: eksenler yeniden yazılmalı
+      case 'raw':
+        if (K && /^(N100|\(BURAYA KADAR\))/.test(it.text)) closeTool();
+        emit(it.text);
+        if (K) {
+          st.pos = {}; st.motion = null; st.F = null; intent = {};
+          // şablon satırındaki G98/G99 ilerleme kipini değiştirir: sonraki işlem doğru kipi yeniden yazar
+          const fm = it.text.replace(/\(.*?\)/g, '').match(/G9[89](?!\d)/g);
+          if (fm) { st.feedMode = fm[fm.length - 1] === 'G98' ? 'min' : 'rev'; kFeed = ''; }
+          if (/M9(?!\d)/.test(it.text)) kCool = false;
+        }
+        break;
+      case 'wo': if (K) break; if (st.wo !== it.code) { emit(it.code); st.wo = it.code; st.pos = {}; st.motion = null; intent = {}; } break; // koordinat değişti: eksenler yeniden yazılmalı
       case 'tool': {
         const t = it.tool;
+        if (K) {
+          closeTool();
+          const n = kayarToolNum(t);
+          emit('T' + String(n).padStart(2, '0') + '00 (' + cleanComment(t.name) + ')');
+          kTool = t; kPend = n;
+          st.motion = null; st.pos = {}; intent = {}; st.F = null;
+          break;
+        }
         emit(fillTemplate(P.toolCall, { tool: t.num, offset: t.offset }) + ' (' + cleanComment(t.name) + ')');
         st.motion = null; st.pos = {}; intent = {}; st.F = null; // yeni takımda F her zaman yazılır
         break;
@@ -166,6 +212,24 @@ function postPath(prog, P, meta, pi) {
           backLive: [C.backLiveCW, C.backLiveCCW, C.backLiveStop, P.spindleAddress.backLive || P.spindleAddress.live],
         }[it.which];
         // zaten duran iş mili için tekrar durdurma kodu yazılmaz (kanal başında durum bilinmez: ilk durdurma yazılır)
+        if (K) {
+          // atölye yazımı: M3S2500 / M36S3500 / M56S4000 — sabit devir (G96 yerine çubuk çapında karşılığı)
+          if (it.dir === 'stop') {
+            if (st.spin?.[it.which] !== 'stop') {
+              const live = it.which === 'live' || it.which === 'backLive';
+              if (kClamp && live) { emit(C.cUnclamp); kClamp = false; }
+              if (live && kCool) { emit(C.coolantOff); kCool = false; }   // atölye: M7 M9 M38
+              emit(map[2]);
+            }
+            (st.spin ||= {})[it.which] = 'stop'; break;
+          }
+          if (!map[0]) throw new Error('Post profilinde iş mili kodu tanımsız: ' + it.which);
+          (st.spin ||= {})[it.which] = it.dir;
+          let rpm = it.rpm;
+          if (it.css) rpm = Math.min(it.maxRpm || Infinity, (it.css * 1000) / (Math.PI * Math.max(0.5, meta.barDia || 10)));
+          emit((it.dir === 'ccw' && map[1] ? map[1] : map[0]) + 'S' + fmtInt(rpm));
+          break;
+        }
         if (it.dir === 'stop') { if (st.spin?.[it.which] !== 'stop') emit(map[2]); (st.spin ||= {})[it.which] = 'stop'; break; }
         (st.spin ||= {})[it.which] = it.dir;
         const m = it.dir === 'ccw' ? map[1] : map[0];
@@ -179,13 +243,40 @@ function postPath(prog, P, meta, pi) {
       }
       case 'feedMode': {
         const code = it.mode === 'rev' ? P.feedPerRev : P.feedPerMin;
-        if (st.feedMode !== it.mode) { emit(code); st.feedMode = it.mode; st.F = null; }
+        if (st.feedMode !== it.mode) { if (K && !skipping) kFeed = code; else emit(code); st.feedMode = it.mode; st.F = null; }
         break;
       }
       case 'plane': if (st.plane !== it.p) { emit(P.plane[it.p]); st.plane = it.p; } break;
-      case 'coolant': emit(it.on ? (it.back ? C.backCoolantOn : C.coolantOn) : (it.back ? C.backCoolantOff : C.coolantOff)); break;
-      case 'rapid': { const w = axisWords(it.pos); if (w) emit((motion('G0') + w.trim())); note(it.pos); break; }
+      case 'coolant':
+        if (K) { if (!it.on && !kCool) break; kCool = !!it.on; }
+        emit(it.on ? (it.back ? C.backCoolantOn : C.coolantOn) : (it.back ? C.backCoolantOff : C.coolantOff)); break;
+      case 'rapid': {
+        it = bz(it);
+        // ön delme kolonu: atölyedeki gibi önce Z ile alın önüne gel (G0Z-5.T12), sonra X/Y — Z bilinmezken X hareketi parçaya çarpar
+        if (K && kPend && kTool?.unit === 'front' && pi === 0 && it.pos.Z == null) {
+          const p0 = { X: 0, Z: -5 + (meta.zShift || 0) };   // X0 aynı blokta: ofset X evdeyken uygulanırsa kolon X1 strokunu aşar
+          const zw = axisWords(p0, true);
+          st.motion = null; emit(motion('G0') + zw.trim() + offWord()); note(p0);
+        }
+        // ön delme kolonu eksende çalışır (atölye programlarında X yazılmaz): X≠0 güvenli çap hareketi atlanır — kolon ofsetiyle X1 strok dışına çıkar
+        if (K && kTool?.unit === 'front' && pi === 0 && it.pos.X != null && Math.abs(it.pos.X) > 1e-9) {
+          const { X, ...rest } = it.pos; it = { ...it, pos: rest };
+          if (!Object.keys(rest).length) break;
+        }
+        const idx = cMove(it.pos);
+        if (idx && kClamp) { emit(C.cUnclamp); kClamp = false; }
+        const w = axisWords(it.pos);
+        const tw = K ? offWord() : '';
+        if (w || tw) { if (tw) st.motion = null; emit(motion('G0') + w.trim() + tw); }
+        note(it.pos);
+        // indeksleme: C konumlandıktan sonra kilitle (M6) — kesme sabit C'de yapılır
+        if (idx && C.cClamp && (st.spin?.live === 'cw' || st.spin?.live === 'ccw' || st.spin?.backLive === 'cw' || st.spin?.backLive === 'ccw')) { emit(C.cClamp); kClamp = true; }
+        break;
+      }
       case 'line': {
+        it = bz(it);
+        if (cMove(it.pos) && kClamp) { emit(C.cUnclamp); kClamp = false; }   // simültane C hareketi: kilit açık
+        if (K && kPend) { emit(motion('G0') + offWord()); }
         const w = axisWords(it.pos);
         if (!w) break;
         if (it.F == null && st.F == null) throw new Error('G1 için ilerleme (F) tanımsız');
@@ -194,6 +285,7 @@ function postPath(prog, P, meta, pi) {
         break;
       }
       case 'arc': {
+        it = bz(it);
         const g = it.cw ? 'G2' : 'G3';
         st.motion = null;
         const w = axisWords(it.pos, true);
@@ -224,6 +316,7 @@ function postPath(prog, P, meta, pi) {
         break;
       }
       case 'm': {
+        if (K && /CAxis(On|Off)$/.test(it.key)) break;   // atölye makinesi: C komutu C eksenine kendisi geçer
         const code = C[it.key];
         if (!code) throw new Error('Post profilinde M kodu tanımsız: ' + it.key);
         emit(code);
@@ -244,7 +337,9 @@ function postPath(prog, P, meta, pi) {
         const um = (v) => String(Math.round(v * 1000));   // P/Q: en küçük birim (µm), ondalık noktasız
         const zz = (v) => fmt(v - (prog.channel === 1 && meta.zShift ? meta.zShift : 0), dec);
         if (it.kind === 'g83') {
-          emit('G83 Z' + zz(it.Z) + ' R' + fmt(it.R, dec) + ' Q' + um(it.Q) + feedWordForce(it.F));
+          if (K && pi === 1 && st.pos.Z != null) emit('G83W' + fmt(+it.Z - st.pos.Z, dec) + 'Q' + um(it.Q) + feedWordForce(it.F));   // atölye: arka delme artımsal
+          else if (K && !it.R) emit('G83Z' + zz(it.Z) + 'Q' + um(it.Q) + feedWordForce(it.F));
+          else emit('G83 Z' + zz(it.Z) + ' R' + fmt(it.R, dec) + ' Q' + um(it.Q) + feedWordForce(it.F));
         } else if (it.kind === 'g84') {
           emit('G84 Z' + zz(it.Z) + ' R' + fmt(it.R, dec) + ' F' + fmt(it.F, 4));
           st.F = null;

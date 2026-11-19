@@ -102,6 +102,7 @@
         <span class="gsp"></span>
         <button class="ib" id="gCopy" title="Tümünü kopyala">Kopyala</button>
         <button class="ib" id="gPaste" title="Panodaki kodu yapıştır (tümünü değiştirir)">Yapıştır</button>
+        <button class="ib" id="gInspect" title="Kodu sonuna kadar simüle et ve işlenen parçayı ölç: çaplar, boylar, pah açıları, kesit">Ölçüm</button>
         <button class="ib" id="gDerive" title="Kodu sonuna kadar simüle et, çıkacak parçayı çiz">Parça çıkar</button>
         <button class="ib" id="gReset" title="Elle yapılan değişiklikleri at, CAM koduna dön">CAM'e dön</button>
       </div>
@@ -125,7 +126,7 @@
 <div class="modal" id="modal"><div class="mbox"><div class="mhead"><span id="mtitle"></span><button id="mclose" aria-label="Kapat">✕</button></div><div class="mbody" id="mbody"></div></div></div>
 <input type="file" id="fileStep" accept=".stp,.step,.STP,.STEP,.obj,.OBJ" hidden>
 <input type="file" id="fileProj" accept=".kcam,.json" hidden>
-<input type="file" id="fileNc" accept=".nc,.txt,.tap,.cnc,.ngc,.NC,.TXT" hidden>
+<input type="file" id="fileNc" accept=".nc,.txt,.tap,.cnc,.ngc,.NC,.TXT" multiple hidden>
 <script type="module" src="/src/main.js"></script>
 </body>
 </html>

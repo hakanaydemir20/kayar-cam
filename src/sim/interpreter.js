@@ -5,10 +5,35 @@ import { makeFrames } from './frames.js';
 
 const EPS = 1e-6;
 
-function buildMMap(profile) {
+function buildMMap(codes) {
   const map = {};
-  for (const [k, v] of Object.entries(profile.codes)) map[normCode(v)] = k;
+  for (const [k, v] of Object.entries(codes)) if (v) map[normCode(v)] = k;
   return map;
+}
+
+/** Programda tanımsız takım: yorumdan (Q2.4 MAT, Q6 FREZE, KILAVUZ, HAVSA, KESKI…) ve takım numarası aralığından yer tutucu */
+export function autoTool(num, comment = '') {
+  const c = String(comment).toUpperCase();
+  const dm = /Q\s*(\d+(?:[.,]\d+)?)/.exec(c) || /(?:^|\s)M(\d+(?:[.,]\d+)?)\b/.exec(c);
+  const dia = dm ? parseFloat(dm[1].replace(',', '.')) : null;
+  const unit = num >= 31 && num <= 39 ? 'cross' : num >= 21 && num <= 28 ? 'back' : num >= 11 && num <= 19 ? 'front' : 'gang';
+  let type;
+  if (/KILAVUZ|TAP/.test(c)) type = 'tap';
+  else if (/HAVSA|PUNTA|PAH/.test(c)) type = 'center';
+  else if (/FREZE/.test(c)) type = 'endmill';
+  else if (/MAT/.test(c)) type = unit === 'cross' ? 'ldrill' : 'drill';
+  else if (/KESKI|KESME|C\/OFF/.test(c)) type = 'cutoff';
+  else if (/DIS/.test(c) && unit === 'gang') type = 'thread';
+  else if (/KANAL/.test(c)) type = 'groove';
+  else type = unit === 'gang' ? (num === 1 ? 'cutoff' : num === 3 ? 'thread' : 'turn') : unit === 'cross' ? 'endmill' : 'drill';
+  const live = unit === 'cross' || (unit === 'back' && type === 'endmill');
+  const t = { id: 'auto' + num, num, offset: num, name: (comment || 'T' + num).toString().slice(0, 40), type, unit, live, auto: true,
+    channel: unit === 'back' ? 2 : 1, yPos: 0, xPos: 0, vc: 60, feed: 0.03 };
+  if (type === 'turn') Object.assign(t, { insertShape: 'V', insertAngle: 35, insertSize: 11, noseR: 0.2 });
+  if (type === 'cutoff' || type === 'groove') Object.assign(t, { width: 2, noseR: 0.1 });
+  if (type === 'thread') Object.assign(t, { noseR: 0.05 });
+  if (['drill', 'ldrill', 'endmill', 'center', 'tap'].includes(type)) Object.assign(t, { dia: dia || (type === 'center' ? 6 : 3), tipAngle: type === 'center' ? 90 : 118, flutes: 2, fz: 0.02, pitch: type === 'tap' ? 0.7 : undefined });
+  return t;
 }
 
 function spindleKeyFor(sel, profile, ch = 1) {
@@ -29,10 +54,22 @@ function spindleKeyFor(sel, profile, ch = 1) {
 export function interpret(text, ctx) {
   const { profile, machine, tools } = ctx;
   const frames = ctx.frames || makeFrames({ L: 30, grip: 5 });
-  const mmap = buildMMap(profile);
+  const dialect = profile.dialect === 'kayar';
+  const mmaps = [buildMMap(profile.codes), buildMMap({ ...profile.codes, ...(profile.codes2 || {}) })];
+  const syncCodes = (profile.syncCodes || []).map(c => normCode(c));
+  const autoTools = [];
+  const pickRefs = []; let subPicks = 0;   // $1 M82 konumları (makine Z1), $2'nin kaçıncı M82'de olduğu
   const parsed = parseProgram(text);
   const errors = [], warnings = [];
   const toolByNum = new Map(tools.map(t => [t.num, t]));
+  const getTool = (num, comment) => {
+    let t = toolByNum.get(num);
+    // atölye yazımı: ön delme kolonu T11–T19 = T35 kolonunun k. katı
+    if (!t && dialect && num >= 11 && num <= 19) t = tools.find(x => x.unit === 'front' && x.num === 35 && (x.offset || 1) === num - 10);
+    if (!t && dialect) { t = autoTool(num, comment); autoTools.push(t); toolByNum.set(num, t); }
+    return t;
+  };
+  const SPECIAL_T = new Set([20, 29]);   // T2000: karşı iş mili tabanı (takım yok), T2900: parça atma
   // çok takımlı tutucu (aynı T no, farklı ofset: T3501, T3502): tam kodla eşleşir
   const toolByCode = new Map(tools.map(t => [t.num * 100 + (t.offset ?? t.num), t]));
   const waitBase = profile.waitStart;
@@ -42,6 +79,8 @@ export function interpret(text, ctx) {
 
   function runPath(path, pi) {
     const ch = pi + 1;
+    const mmap = mmaps[pi] || mmaps[0];
+    let lastComment = '', pendingT = null;
     const moves = [];
     const S = {
       pos: { X: ch === 1 ? profile.safeX : 0, Y: 0, Z: ch === 1 ? -1 : (machine.subHomeZ ?? 200), C: 0 }, // karşı iş mili park konumunda başlar
@@ -72,6 +111,13 @@ export function interpret(text, ctx) {
       if (S.F == null || S.F <= 0) { err(li, 'İlerleme (F) tanımsız veya sıfır'); return 100; }
       if (S.feedMode === 'min' && !isThread) return S.F;
       const rpm = curRpm(li);
+      if (rpm <= 0 && dialect && ch === 2 && S.spindle.sub.dir === 'stop') {
+        // Kayar: $2'de karşı mil duruyorken G99 (ör. O7553 orta yeniden bağlama: "G99 G0Z195 G1Z200F1", ana mil
+        // aynı anda S2500 tornalıyor). Varsayım: FANUC çok kanallı devir başına ilerleme, karşı mil durukken ana milin
+        // konum kodlayıcısını izler (program makinede çalışıyor). Süre geçici; zaman çizelgesinden sonra ana milin o
+        // andaki devriyle yeniden hesaplanır — ana mil de o an duruyorsa hata yine verilir (resolveRevMain).
+        S._revMain = S.F; return 100;
+      }
       if (rpm <= 0) { err(li, 'Devir başına ilerleme var ama iş mili duruyor'); return 100; }
       return S.F * rpm;
     };
@@ -87,7 +133,11 @@ export function interpret(text, ctx) {
       return Math.max(d / machine.rapid * 60, c) + 0.02;
     };
     const toM = (pos) => frames.toMachine(ch, pos, { tool: S.tool, wo: S.wo, extZ: S.extZ });
-    const pushMove = (m) => { moves.push({ ...m, path: ch, state: snapshot(), mFrom: toM(m.from), mTo: toM(m.to) }); };
+    const pushMove = (m) => {
+      const mv = { ...m, path: ch, state: snapshot(), mFrom: toM(m.from), mTo: toM(m.to) };
+      if (S._revMain != null && (m.kind === 'feed' || m.kind === 'arc' || m.kind === 'thread')) mv.revMain = S._revMain;
+      moves.push(mv);
+    };
     const checkLimits = (li, ppos) => {
       const ax = machine.axes;
       const pos = toM(ppos);
@@ -102,8 +152,9 @@ export function interpret(text, ctx) {
     };
     const requireCutReady = (li) => {
       const t = S.tool;
-      if (ch === 2 && (!t || S.wo === 'G54')) return; // karşı iş mili transfer hareketi (G54: takım kesmede değil; örtüşen çevrimde son arka takım hâlâ seçili)
-      if (!t) { err(li, 'Takım çağrılmadan kesme hareketi'); return; }
+      if (ch === 2 && (!t || S.wo === 'G54' || S.wo === 'G131' || S.wo === 'T29')) return; // karşı iş mili transfer hareketi (G54: takım kesmede değil; örtüşen çevrimde son arka takım hâlâ seçili)
+      if (!t) { if (dialect && ch === 1) return; err(li, 'Takım çağrılmadan kesme hareketi'); return; }   // kayar: takımsız G1 = başlık hareketi
+      if (dialect && S.cClamp && !t.live && S.spindle[workSpindle()].dir === 'stop') return;   // C kilitli, iş mili duruk: planyalama (Y/Z ile kazıma)
       if (t.live) {
         const key = t.unit === 'back' ? 'backLive' : 'live';
         if (S.spindle[key].dir === 'stop') err(li, `Tahrikli takım (${t.name}) dönmüyor`);
@@ -113,8 +164,12 @@ export function interpret(text, ctx) {
     };
 
     path.lines.forEach((ln, li) => {
+      if (ln.assign && ln.assign.n === 530 && ch === 2 && frames.setGrip) frames.setGrip(ln.assign.v);
       if (ln.empty) return;
+      S._revMain = null;
+      if (ln.comment && !(ln.words || []).length) lastComment = ln.comment;
       for (const e of ln.errors || []) err(li, e);
+      for (const e of ln.warnings || []) warn(li, e);
       const w = ln.words;
       if (!w.length) return;
       // ön geçiş: takım ve iş koordinatı değişimi (makine yerinde kalır, program koordinatı değişir)
@@ -123,6 +178,25 @@ export function interpret(text, ctx) {
         if (wd.a !== 'T' && !isWo) continue;
         const mach = toM(S.pos);
         if (isWo) S.wo = 'G' + wd.v;
+        else if (dialect) {
+          // T0200: takım seçimi (ofset yok) · T2: ofset 2 uygula · T0: ofset iptal
+          const v = Math.round(wd.v), big = wd.raw.replace(/^[+-]/, '').length >= 3;
+          if (big) {
+            const num = Math.floor(v / 100);
+            pendingT = num;
+            S.tool = null; S.toolCode = wd.raw;
+            if (ch === 2 && num === 29) { S.wo = 'T29'; S._t29 = true; }   // T2900 parça atma konumu: makine Z2 (karşı mil alnı), ofset X2 = eksende
+            if (!SPECIAL_T.has(num) && num > 0) S.selName = (ln.comment || lastComment || '');
+          } else if (v === 0) { S._offBase = { ...S.pos }; S.tool = null; S.toolCode = '0'; }
+          else {
+            S._offBase = { ...S.pos };   // FANUC: ofset bu blokta uygulanır → makine yeni takımın konumuna gider (Y dahil)
+            const t = getTool(v, pendingT === v ? S.selName : ln.comment || lastComment);
+            if (!t) err(li, `Tanımsız takım T${wd.raw}`);
+            else if (t.channel !== ch && !t.auto) err(li, `${t.name} ${ch}. kanalda kullanılamaz (takım ${t.channel}. kanalda)`);
+            if (t && t.auto && t.channel !== ch) t.channel = ch;
+            S.tool = t || null; S.toolCode = wd.raw;
+          }
+        }
         else {
           const num = Math.floor(wd.v / 100);
           const t = toolByCode.get(Math.round(wd.v)) || toolByNum.get(num);
@@ -143,8 +217,9 @@ export function interpret(text, ctx) {
         pushMove({ kind: 'event', line: li, event: 'workShift', from: { ...S.pos }, to: { ...S.pos }, dur: 0.05 });
         return;
       }
-      const target = { ...S.pos };
-      let hasAxis = false, motion = null, arcC = {}, dwell = null, cycle = null;
+      const target = { ...(S._offBase || S.pos) };
+      let hasAxis = !!S._offBase, motion = null, arcC = {}, dwell = null, cycle = null;
+      const g28 = {}; S._g28 = false; let zeroSet = false; S._offBase = null;
       const mcodes = [];
       const isG = (v) => w.some(wd => wd.a === 'G' && Math.abs(wd.v - v) < 1e-9);
       const cylLine = isG(7.1);
@@ -173,13 +248,24 @@ export function interpret(text, ctx) {
             else if (gv === 99) S.feedMode = 'rev';
             else if (gv === 50) S._g50 = true;
             else if (gv === 54 || gv === 55 || gv === 56) { /* ön geçişte işlendi */ }
-            else if (gv === 83 || gv === 84 || gv === 76) cycle = gv;
+            else if (gv === 83 || gv === 84 || gv === 76 || gv === 87) cycle = gv;
+            else if (gv === 28) S._g28 = true;
+            else if (gv === 125) { zeroSet = true; }
+            else if (gv === 130 || gv === 131) {
+              // G130: arka işleme çerçevesi (Z0 = parçanın arka alnı) · G131: ana mil sıfırı karşı mile (yakalama)
+              const mach = toM(S.pos);
+              S.wo = gv === 130 ? 'G55' : 'G131';
+              S.pos = frames.fromMachine(ch, mach, { tool: S.tool, wo: S.wo, extZ: S.extZ });
+              Object.assign(target, S.pos);
+            }
             else if (gv === 80) { S.rigid = false; }
             else if ([21, 40].includes(gv)) { /* güvenli varsayılanlar */ }
             else warn(li, 'Simülasyonda desteklenmeyen G kodu: ' + g);
             break;
           }
+          case 'H': target.C = (S.pos.C || 0) + wd.v; hasAxis = true; if (dialect) { if (ch === 1) S.cAxis = true; else S.subCAxis = true; } break;
           case 'C':
+            if (dialect && !cylLine) { if (ch === 1) S.cAxis = true; else S.subCAxis = true; }
             if (cylLine) {
               S.cylR = wd.v;
               if (wd.v > 0 && (ch === 1 ? !S.cAxis : !S.subCAxis)) err(li, 'G7.1 için C ekseni modu açık olmalı');
@@ -188,13 +274,15 @@ export function interpret(text, ctx) {
             if (S.polar) { hypT.y = wd.v; hasAxis = true; break; }
             target.C = wd.v; hasAxis = true; break;
           case 'X':
+            if (dwell != null) { dwell = wd.v; break; }
             if (S.polar && hypT) { hypT.x = wd.v / 2; hasAxis = true; break; }
             target.X = wd.v; hasAxis = true; break;
           case 'Y': case 'Z':
             target[wd.a] = wd.v; hasAxis = true; break;
-          case 'U': if (dwell != null) dwell = wd.v; else { target.X = S.pos.X + wd.v; hasAxis = true; } break;
-          case 'W': target.Z = S.pos.Z + wd.v; hasAxis = true; break;
+          case 'U': if (dwell != null) dwell = wd.v; else if (S._g28) g28.X = true; else { target.X = S.pos.X + wd.v; hasAxis = true; } break;
+          case 'W': if (S._g28) g28.Z = true; else if (cycle === 83 || cycle === 84) { /* çevrim derinliği (artımsal) */ } else { target.Z = S.pos.Z + wd.v; hasAxis = true; } break;
           case 'P': if (dwell != null) dwell = wd.v / 1000; break;
+          case 'L': break;
           case 'I': arcC.I = wd.v; break;
           case 'J': arcC.J = wd.v; break;
           case 'K': arcC.K = wd.v; break;
@@ -202,6 +290,11 @@ export function interpret(text, ctx) {
           case 'F': S.F = wd.v; break;
           case 'S': {
             let key = wd.sel != null ? spindleKeyFor(wd.sel, profile, ch) : workSpindle();
+            if (wd.sel == null && dialect) {
+              const ks = w.filter(x => x.a === 'M').map(x => mmap[normCode('M' + x.v)] || '');
+              if (ks.some(k => k.startsWith('backLive'))) key = 'backLive';
+              else if (ks.some(k => k.startsWith('live'))) key = 'live';
+            }
             if (!key) { err(li, 'Bilinmeyen iş mili seçimi S' + wd.sel); break; }
             if (S._g50) { S.maxRpm = wd.v; S._g50 = false; }
             else if (S.css && (key === 'main' || key === 'sub')) S.vc = wd.v;
@@ -218,6 +311,19 @@ export function interpret(text, ctx) {
 
       // M kodları
       for (const mc of mcodes) {
+        if (dialect && syncCodes.includes(mc)) {
+          // iki kanalın birlikte verdiği eşleme kodları (M82/M83 iş mili senkronu, M40/M41 Z senkronu): bekleme noktası
+          // ana mil kesme konumu: karşı milin G131 çerçevesi bu konuma göre (parça ön alnı)
+          // Her M82 bir yakalama/destek noktasıdır (O7553: uzun parçada ortada yeniden bağlama + sonda kesme yakalaması).
+          // $1 her M82'deki ana mil konumunu sıraya yazar; $2 k. M82'sinde G131 çerçevesini k. konuma bağlar.
+          // ($1 önce yorumlanır; tek yakalamalı programlarda davranış eskisiyle aynı: tek değer.)
+          if (mc === syncCodes[0]) {
+            if (ch === 1) { pickRefs.push(toM(S.pos).Z); if (frames.pickRef == null) frames.pickRef = pickRefs[0]; }
+            else if (pickRefs.length) frames.pickRef = pickRefs[Math.min(subPicks++, pickRefs.length - 1)];
+          }
+          pushMove({ kind: 'wait', line: li, n: 1000 + syncCodes.indexOf(mc), from: { ...S.pos }, to: { ...S.pos }, dur: 0 });
+          continue;
+        }
         const wm = waitRe.exec(mc);
         if (wm && +wm[1] >= waitBase && +wm[1] < waitBase + 100 && !mmap[mc]) { pushMove({ kind: 'wait', line: li, n: +wm[1] - waitBase, from: { ...S.pos }, to: { ...S.pos }, dur: 0 }); continue; }
         const key = mmap[mc];
@@ -233,23 +339,40 @@ export function interpret(text, ctx) {
           }
         };
         switch (key) {
-          case 'mainCW': set('main', 'cw'); break; case 'mainCCW': set('main', 'ccw'); break; case 'mainStop': set('main', 'stop'); break;
-          case 'subCW': set('sub', 'cw'); break; case 'subCCW': set('sub', 'ccw'); break; case 'subStop': set('sub', 'stop'); break;
+          case 'mainCW': set('main', 'cw'); if (dialect) S.cAxis = false; break; case 'mainCCW': set('main', 'ccw'); if (dialect) S.cAxis = false; break; case 'mainStop': set('main', 'stop'); break;
+          case 'subCW': set('sub', 'cw'); if (dialect) S.subCAxis = false; break; case 'subCCW': set('sub', 'ccw'); if (dialect) S.subCAxis = false; break; case 'subStop': set('sub', 'stop'); break;
           case 'liveCW': set('live', 'cw'); break; case 'liveCCW': set('live', 'ccw'); break; case 'liveStop': set('live', 'stop'); break;
           case 'backLiveCW': set('backLive', 'cw'); break; case 'backLiveCCW': set('backLive', 'ccw'); break; case 'backLiveStop': set('backLive', 'stop'); break;
           case 'coolantOn': case 'backCoolantOn': S.coolant = true; break;
           case 'coolantOff': case 'backCoolantOff': S.coolant = false; break;
           case 'mainCAxisOn': S.cAxis = true; break; case 'mainCAxisOff': S.cAxis = false; break;
           case 'rigidTap': S.rigid = true; break;
+          case 'cClamp': S.cClamp = true; break; case 'cUnclamp': S.cClamp = false; break;
           case 'subCAxisOn': S.subCAxis = true; break; case 'subCAxisOff': S.subCAxis = false; break;
         }
         pushMove({ kind: 'event', line: li, event: key, from: { ...S.pos }, to: { ...S.pos }, dur: eventTime(key) });
       }
 
       if (dwell != null) { pushMove({ kind: 'dwell', line: li, from: { ...S.pos }, to: { ...S.pos }, dur: dwell }); return; }
+      if (zeroSet) {
+        // G125 Z: ana mil Z sıfırı alma (çubuk dayamada); konum değişmez
+        pushMove({ kind: 'event', line: li, event: 'zeroSet', from: { ...S.pos }, to: { ...S.pos }, dur: 0.1 });
+        return;
+      }
+      if (g28.X || g28.Z) {
+        // referans dönüşü: makine koordinatında eksen başlangıcına (hızlı)
+        const m = toM(S.pos), ax = machine.axes;
+        if (g28.X) m.X = ch === 1 ? (profile.homeX1 ?? ax.X1.max) : (profile.homeX2 ?? 0);
+        if (g28.Z) m.Z = ch === 1 ? (profile.homeZ1 ?? ax.Z1.min) : (machine.subHomeZ ?? ax.Z2.max);
+        const to = frames.fromMachine(ch, m, { tool: S.tool, wo: S.wo, extZ: S.extZ });
+        pushMove({ kind: 'rapid', line: li, from: { ...S.pos }, to: { ...to }, dur: rapidTime(S.pos, to) });
+        S.pos = to;
+        return;
+      }
       if (cycle) { runCycle(li, cycle, w); return; }
       if (motion) S.motion = motion;
       if (!hasAxis) return;
+      if (S._t29 && hasAxis) { if (!w.some(x => x.a === 'X' || x.a === 'U')) target.X = 0; S._t29 = false; }
       if (S.polar) { polarMove(li, hypT, target); return; }
       if (target.C !== S.pos.C && S.tool && (ch === 1 ? !S.cAxis : !S.subCAxis)) err(li, 'C ekseni modu kapalıyken C hareketi');
       checkLimits(li, target);
@@ -269,6 +392,7 @@ export function interpret(text, ctx) {
         case 'G2': case 'G3': {
           requireCutReady(li);
           const a = arcGeom(S.plane, from, target, arcC, S.motion === 'G2', li);
+          if (a === 'line') { const L = dist(from, target, S.cylR), f = feedMmMin(li); pushMove({ kind: 'feed', line: li, from, to: { ...target }, feed: f, rpm: curRpm(li), dur: (L / f) * 60 }); break; }
           if (!a) break;
           const f = feedMmMin(li);
           pushMove({ kind: 'arc', line: li, from, to: { ...target }, arc: a, feed: f, rpm: curRpm(li), dur: (a.length / f) * 60 });
@@ -341,8 +465,29 @@ export function interpret(text, ctx) {
         S.pos = start;
         return;
       }
-      // G83 / G84: Z ekseninde (ön/arka eksenel)
-      const zb = v('Z'), R = v('R') ?? 0;
+      if (code === 87) {
+        // G87: radyal (X) gagalı delme — X dip (çap), Q gaga (µm), R dönüş
+        const xb = v('X');
+        if (xb == null) { err(li, 'G87: X (delik dibi) gerekli'); return; }
+        requireCutReady(li);
+        const x0 = S.pos.X, q = Math.max(2 * (v('Q') ?? 0) / 1000, Math.abs(x0 - xb) / 200) || Math.abs(x0 - xb), f = feedMmMin(li), rpm = curRpm(li);
+        const atX = (x) => ({ ...S.pos, X: x });
+        checkLimits(li, atX(xb));
+        let x = x0;
+        while (x - xb > 1e-9) {
+          const xn = Math.max(xb, x - q);
+          const xs = x === x0 ? x0 : x + 2 * (profile.peckClearance ?? 0.2);
+          if (xs !== x0) push('rapid', atX(x0), atX(xs));
+          push('feed', atX(xs), atX(xn), { feed: f, rpm });
+          push('rapid', atX(xn), atX(x0));
+          x = xn;
+        }
+        S.pos = atX(x0);
+        return;
+      }
+      // G83 / G84: Z ekseninde (ön/arka eksenel); W = başlangıçtan artımsal derinlik
+      const wInc = v('W');
+      const zb = wInc != null ? S.pos.Z + wInc : v('Z'), R = v('R') ?? 0;
       if (zb == null) { err(li, `G${code}: Z (delik dibi) gerekli`); return; }
       const z0 = S.pos.Z, zr = z0 + R, dir = Math.sign(zb - zr) || 1;
       checkLimits(li, { ...S.pos, Z: zb });
@@ -364,7 +509,7 @@ export function interpret(text, ctx) {
         }
       } else {
         if (!S.rigid) { err(li, 'G84 rijit kılavuz için önce M29 S… gerekli'); return; }
-        const sp = S.spindle[workSpindle()];
+        const sp = S.tool && S.tool.live ? S.spindle[S.tool.unit === 'back' ? 'backLive' : 'live'] : S.spindle[workSpindle()];
         if (!(sp.rpm > 0)) { err(li, 'M29 için devir (S) tanımsız'); return; }
         if (S.feedMode !== 'rev') warn(li, 'G84: G99 (devir başına) ile F = hatve olmalı');
         const f = (S.F || 0) * sp.rpm;
@@ -408,7 +553,30 @@ export function interpret(text, ctx) {
       if (plane === 'zx') { axU = 'Z'; axV = 'X'; axW = 'Y'; u0 = a.Z; v0 = a.X / 2; u1 = b.Z; v1 = b.X / 2; cu = u0 + (c.K || 0); cv = v0 + (c.I || 0); }
       else if (plane === 'yz') { axU = 'Y'; axV = 'Z'; axW = 'X'; u0 = a.Y; v0 = a.Z; u1 = b.Y; v1 = b.Z; cu = u0 + (c.J || 0); cv = v0 + (c.K || 0); }
       else { axU = 'X'; axV = 'Y'; axW = 'Z'; u0 = a.X / 2; v0 = a.Y; u1 = b.X / 2; v1 = b.Y; cu = u0 + (c.I || 0); cv = v0 + (c.J || 0); }
-      if (c.R != null) { err(li, 'R ile yay desteklenmiyor, I/J/K kullanın'); return null; }
+      // FANUC 0i-TF: R/I/K'sız G2/G3 → parametre 3403#5 (CIR)=0 (varsayılan) doğrusal hareket, =1 ise PS0022 alarmı.
+      // Atölye programı (O1616: "G2…R5" ardından "Z69") makinede çalıştığından CIR=0 kabul edilir; uyarı kalır.
+      // R < kiriş/2: FANUC parametre 3403#6 (RER)=0 → yarıçap büyütülüp yarım daire (merkez kiriş ortası), =1 → alarm.
+      // O101786/O102643 "X0 → G2X3.8W3.8R1.9": başlangıç gerçekten (X0, Z0) — artımsal W tek başına; muhtemelen
+      // W1.9 yazılmak istendi. Makinede RER=0 varsayımıyla yarım daire çizilir; parametre doğrulanmadığı için uyarı.
+      if (c.R == null && c.I == null && c.J == null && c.K == null && dialect) { warn(li, 'G2/G3 modal: R/I/K yok — doğrusal hareket varsayıldı, makinede kontrol edin'); return 'line'; }
+      if (c.R != null) {
+        // R ile yay: R > 0 kısa yay (≤180°), R < 0 uzun yay; merkez iki adaydan yön kuralına göre seçilir
+        const R = Math.abs(c.R), du = u1 - u0, dv = v1 - v0, d = Math.hypot(du, dv);
+        if (d < 1e-9) { err(li, 'R ile tam daire yazılamaz'); return null; }
+        if (d > 2 * R + 0.002) {
+          if (!dialect) { err(li, `Yay yarıçapı (R${c.R}) uç noktalar için küçük`); return null; }
+          warn(li, `Yay yarıçapı R${c.R} uç noktalar arası yarısından (${(d / 2).toFixed(3)}) küçük — yarım daire varsayıldı, makinede kontrol edin`);
+        }
+        const hh = Math.sqrt(Math.max(0, R * R - d * d / 4)), mu = (u0 + u1) / 2, mv = (v0 + v1) / 2;
+        const cands = [[mu - dv / d * hh, mv + du / d * hh], [mu + dv / d * hh, mv - du / d * hh]];
+        let pick = cands[0];
+        for (const [qu, qv] of cands) {
+          let sw = Math.atan2(v1 - qv, u1 - qu) - Math.atan2(v0 - qv, u0 - qu);
+          if (cw) { while (sw >= 0) sw -= 2 * Math.PI; } else { while (sw <= 0) sw += 2 * Math.PI; }
+          if ((Math.abs(sw) <= Math.PI + 1e-9) === (c.R > 0)) { pick = [qu, qv]; break; }
+        }
+        cu = pick[0]; cv = pick[1];
+      }
       const r0 = Math.hypot(u0 - cu, v0 - cv), r1 = Math.hypot(u1 - cu, v1 - cv);
       if (Math.abs(r0 - r1) > 0.002) { err(li, `Yay yarıçap tutarsız: başlangıç ${r0.toFixed(4)} bitiş ${r1.toFixed(4)}`); return null; }
       const t0 = Math.atan2(v0 - cv, u0 - cu);
@@ -433,7 +601,24 @@ export function interpret(text, ctx) {
 
   // ---- Kanal senkronizasyonu ----
   schedule(result, errors);
-  return { paths: result, errors, warnings };
+  if (resolveRevMain(result, errors)) schedule(result, []);   // süreler değişti: yeniden hizala (bekleme hataları aynı)
+  return { paths: result, errors, warnings, autoTools };
+}
+
+/** $2 duruk karşı mil + G99 hareketleri: ana milin (kanal 1) o andaki devriyle ilerleme/süre. Değişiklik olduysa true. */
+function resolveRevMain(paths, errors) {
+  const p1 = paths[0]?.moves || [];
+  let changed = false;
+  for (const p of paths.slice(1)) for (const m of p.moves) {
+    if (m.revMain == null) continue;
+    let st = null;
+    for (const a of p1) { if (a.t0 == null || a.t0 > m.t0 + 1e-9) break; st = a.state; }
+    const rpm = st && st.main.dir !== 'stop' ? st.main.rpm : 0;
+    if (!(rpm > 0)) { errors.push({ path: m.path, line: m.line, msg: 'Devir başına ilerleme var ama iş mili duruyor (karşı mil ve ana mil duruk)' }); continue; }
+    const f = m.revMain * rpm;
+    m.dur = m.dur * (m.feed || 100) / f; m.feed = f; m.rpm = rpm; changed = true;
+  }
+  return changed;
 }
 
 function eventTime(key) {
@@ -445,7 +630,8 @@ function eventTime(key) {
 }
 
 function dist(a, b, cylR = 0) {
-  const c = cylR > 0 ? ((b.C - a.C) * Math.PI / 180) * cylR : 0;  // G7.1: yüzey boyunca
+  // G7.1: yüzey boyunca; değilse FANUC bileşik ilerleme: döner eksen derecesi mm gibi sayılır
+  const c = cylR > 0 ? ((b.C - a.C) * Math.PI / 180) * cylR : (b.C ?? 0) - (a.C ?? 0);
   return Math.hypot((b.X - a.X) / 2, b.Y - a.Y, b.Z - a.Z, c);
 }
 

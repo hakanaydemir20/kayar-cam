@@ -9,7 +9,7 @@
   "rapid": 35000,
   "axes": {
     "X1": {
-      "min": -10,
+      "min": -16,
       "max": 200,
       "estimated": true,
       "desc": "Gang tool post radyal (çap değeri)"
@@ -21,7 +21,7 @@
       "desc": "Gang tool post takım seçimi / çapraz"
     },
     "Z1": {
-      "min": -5,
+      "min": -20,
       "max": 205,
       "estimated": false,
       "desc": "Kayar başlık stroku 205 mm"

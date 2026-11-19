@@ -1,6 +1,13 @@
 // Proje: makine + post + stok + parça + takımlar + işlemler. JSON kaydet/aç.
 import machineDef from './machine/sb20r-g.json';
-import postDef from './post/postProfile.json';
+import starPostDef from './post/postProfile.json';
+import kayarPostDef from './post/postProfileKayar.json';
+
+/** Post profilleri: varsayılan atölye (örnek programlardan çıkarılan) yazımı; Star katalog profili seçilebilir */
+export const POST_PROFILES = { kayar: kayarPostDef, star: starPostDef };
+export const postDef = kayarPostDef;
+export const profileKey = (post) => (post?.dialect === 'kayar' ? 'kayar' : 'star');
+export const postProfile = (key) => clone(POST_PROFILES[key] || kayarPostDef);
 import { defaultTools, STATIONS } from './tools/toolLibrary.js';
 import { examplePart, suggestBar } from './part/part.js';
 import { makeOp, buildProgram } from './ops/program.js';
@@ -86,6 +93,7 @@ export function autoOperations(p) {
 
 /** Tam boru hattı: işlemler → IR → G-kod → yorumla (simülasyon/doğrulama girdisi) */
 export function runPipeline(project) {
+  syncBladeRef(project);
   const built = buildProgram(project);
   let posted = null, sim = null;
   const errors = built.errors.map(e => ({ ...e, src: 'cam' }));
@@ -95,6 +103,7 @@ export function runPipeline(project) {
       partName: project.part.name, date: new Date().toISOString().slice(0, 10),
       stock: `CUBUK D${project.stock.barDia} BOY ${project.part.length.toFixed(2)}`,
       zShift: project.zero?.zShift || 0,
+      barDia: project.stock.barDia,
     });
   } catch (e) {
     errors.push({ src: 'post', msg: e.message });
@@ -124,7 +133,12 @@ export function runPipeline(project) {
 }
 
 /** NC metnini projenin makinesi/takımlarıyla yorumlar (CAM çıktısı veya elle yazılmış kod) */
+/** Kanal/bıçak Z referansı post profilinden: atölye yazımında kesme/kanal takımı ayna tarafı kenarından ölçülür */
+export function syncBladeRef(project) {
+  for (const t of project.tools) if (t.type === 'cutoff' || t.type === 'groove') { if (project.post?.bladeRef === 'back') t.zRef = 'back'; else delete t.zRef; }
+}
 export function simulateText(project, text) {
+  syncBladeRef(project);
   const pick = project.ops.find(o => o.type === 'pickoff' && o.enabled);
   const cutOp = project.ops.find(o => o.type === 'cutoff' && o.enabled);
   const grip = pick ? Math.round(pickGrip(pick.params.grip, project.part.length, Math.max(0, +cutOp?.params.backStock || 0), project.machine) * 1000) / 1000 : 5;
@@ -146,6 +160,7 @@ export function loadProject(text) {
 }
 
 /** Eski proje dosyaları: yeni eklenen post/makine anahtarlarını varsayılanlarla tamamla (kullanıcı değerleri korunur) */
+const stable = (o) => (o && typeof o === 'object' ? (Array.isArray(o) ? '[' + o.map(stable).join(',') + ']' : '{' + Object.keys(o).sort().map(k => JSON.stringify(k) + ':' + stable(o[k])).join(',') + '}') : JSON.stringify(o));
 export function migrate(p) {
   const deep = (def, cur) => {
     if (cur == null) return clone(def);
@@ -154,7 +169,9 @@ export function migrate(p) {
     for (const [k, v] of Object.entries(def)) out[k] = k in cur ? deep(v, cur[k]) : clone(v);
     return out;
   };
-  p.post = deep(postDef, p.post);
+  // El değmemiş eski varsayılan Star profili → atölye profili; kullanıcı değiştirdiyse korunur
+  if (p.post && p.post.dialect !== 'kayar' && stable(deep(starPostDef, p.post)) === stable(starPostDef)) p.post = clone(kayarPostDef);
+  p.post = deep(POST_PROFILES[profileKey(p.post)], p.post);
   p.machine = deep(machineDef, p.machine);
   for (const t of p.tools) if (t.xPos == null) t.xPos = 0;
   if ((p.layout || 1) < 2) migrateLayout(p);

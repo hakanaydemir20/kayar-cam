@@ -5,6 +5,8 @@ import { frontDrillReach } from '../tools/toolGeom.js';
 
 const near = (a, b) => Math.abs(a - b) < 1e-6;
 const catItems = (pred) => TOOL_CATALOG.flatMap(g => g.items).filter(it => pred(it.p));
+const drillTip = (t) => (t.dia / 2) / Math.tan(((t.tipAngle || 118) / 2) * Math.PI / 180);
+const fitsFrontDrill = (h, t) => h.depth + drillTip(t) + (h.through ? 0.5 : 0) <= frontDrillReach(t) + 1e-6;
 
 /** P: proje · mat: malzeme anahtarı. Dönen adımlar: { key, type, featureId, name, title, desc, side, tool? | preset? } */
 export function featurePlan(P, mat = P.stock.material || 'free', reserved = new Set()) {
@@ -84,13 +86,16 @@ export function featurePlan(P, mat = P.stock.material || 'free', reserved = new 
   }
   const L = P.part.length, r2 = (v) => Math.round(v * 100) / 100;
   for (const hl of front.filter(x => x.dia <= maxFront + 1e-6)) {
-    const t = pick('drill', hl, x => x.type === 'drill' && x.unit === 'front' && near(x.dia, hl.dia), null,
+    const matches = x => x.type === 'drill' && x.unit === 'front' && near(x.dia, hl.dia);
+    // Boydan deliği bölmeden önce, tam derinliğe ulaşan takılı matkapları dene.
+    const full = hl.through && pick('drill', hl, x => matches(x) && fitsFrontDrill(hl, x), null, () => null);
+    const t = full || pick('drill', hl, matches, null,
       () => preset('dr' + hl.dia, { name: `Matkap Ø${hl.dia}`, type: 'drill', unit: 'front', dia: hl.dia, vc: M.vcDrill, feed: drillFeed(hl.dia), xPos: -52 }));
     if (!t) continue;
     // önden erişim: matkabın kesici boyu ve ön kovan bloğu. Boydan delik erişimden uzunsa önden + arkadan (parça alındıktan sonra) bölünür
     const dt = t.tool || { type: 'drill', unit: 'front', dia: hl.dia, tipAngle: 118, ...t.preset };
-    const tip = (hl.dia / 2) / Math.tan(((dt.tipAngle || 118) / 2) * Math.PI / 180), reach = frontDrillReach(dt);
-    if (hl.depth + tip + (hl.through ? 0.5 : 0) <= reach + 1e-6) {
+    const tip = drillTip(dt), reach = frontDrillReach(dt);
+    if (fitsFrontDrill(hl, dt)) {
       add('drill', hl, `Delme Ø${hl.dia}`, `${hl.through ? 'Boydan' : 'Derinlik ' + hl.depth} · gagalama otomatik`, t);
     } else if (hl.through) {
       const fd = Math.floor((reach - tip - 0.05) * 100) / 100, bd = r2(L - fd + 0.3);

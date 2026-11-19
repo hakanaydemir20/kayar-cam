@@ -200,19 +200,22 @@ export class StockMesh {
     attr.needsUpdate = true;
   }
   /** Verify renk haritası: status (0 tamam, 1 fazla kesim, 2 kalan), null → canlı renk */
-  setStatusColors(status) {
+  setStatusColors(status, innerStatus = null) {
     this.statusOn = !!status;
     if (!status) { if (this.tgt || this.stock.crash) this.colorRows(0, this.rows - 1); else this.paintStock(); return; }
     const S = this.stock, ring = this.ring, C = this.col;
+    const color = s => s === 1 ? [0.95, 0.2, 0.2] : s === 2 ? [0.25, 0.55, 1.0] : s === 3 ? COL.stock : [0.35, 0.85, 0.5];
     for (let r = 0; r < this.rows; r++) {
       const i = this.i0 + r;
       for (let j = 0; j < ring; j++) {
         const s = status ? status[i * S.nth + (j % S.nth)] : 0;
         const k = (r * ring + j) * 3;
-        const c = s === 1 ? [0.95, 0.2, 0.2] : s === 2 ? [0.25, 0.55, 1.0] : [0.35, 0.85, 0.5];
+        const c = S.crash?.[i * S.nth + (j % S.nth)] ? COL.over : color(s);
         C[k] = c[0]; C[k + 1] = c[1]; C[k + 2] = c[2];
+        if (innerStatus) C.set(color(innerStatus[i]), (this.nOuter + r * ring + j) * 3);
       }
     }
+    if (innerStatus) for (let j = 0; j < 4 * ring; j++) C.set(COL.stock, (this.capBase + j) * 3);
     this.geometry.attributes.color.needsUpdate = true;
   }
   /** Kenar çizgileri: eksenel kademe (|Δr|/dz > 1), çevresel kenar (|Δr|/(r·dθ) > 1), uç alınları ve delik ağızları */
